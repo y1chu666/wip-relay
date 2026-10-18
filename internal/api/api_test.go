@@ -724,6 +724,44 @@ func TestRateLimitApplies(t *testing.T) {
 	}
 }
 
+// TestRateLimitAppliesToDestructiveCommands 检查注册、吊销与退役同样受来源地址限流约束，
+// 使它们在验签之前就被挡住。
+func TestRateLimitAppliesToDestructiveCommands(t *testing.T) {
+	env := newEnv(t, func(cfg *config.Config) {
+		cfg.Limits.RequestsPerMinute = 1
+	})
+	key := newKey(t)
+	channelID := env.register(key, "device-a")
+
+	status, body, _ := env.call(key, pathRevoke, revokeRequest{ChannelID: channelID, Target: key.Fingerprint().String()})
+	expectStatus(t, status, body, http.StatusTooManyRequests)
+
+	status, body, _ = env.call(key, pathRetire, retireRequest{ChannelID: channelID})
+	expectStatus(t, status, body, http.StatusTooManyRequests)
+
+	other := newKey(t)
+	status, body, _ = env.call(other, pathRegister, registerRequest{
+		Channel:    testChannel,
+		Credential: testCredential,
+		Label:      "device-b",
+		PublicKey:  base64.StdEncoding.EncodeToString(other.Public()),
+	})
+	expectStatus(t, status, body, http.StatusTooManyRequests)
+}
+
+func TestRegisterRejectsMissingChannelName(t *testing.T) {
+	env := newEnv(t, nil)
+	key := newKey(t)
+
+	status, body, _ := env.call(key, pathRegister, registerRequest{
+		Credential: testCredential,
+		Label:      "device-a",
+		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
+	})
+
+	expectStatus(t, status, body, http.StatusBadRequest)
+}
+
 func TestUnsupportedPathIsNotFound(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)

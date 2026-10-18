@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"vaultwaystation/internal/config"
@@ -52,7 +53,9 @@ const channelIDBytes = 16
 
 // Server 是中继服务端的接口实现。
 type Server struct {
-	cfg     *config.Config
+	// settings 用原子指针存放，使配置重载与并发请求互不阻塞。
+	settings atomic.Pointer[config.Config]
+
 	store   *store.Store
 	key     *identity.KeyPair
 	replay  *envelope.ReplayGuard
@@ -66,8 +69,7 @@ type Server struct {
 
 // New 创建接口实现。
 func New(cfg *config.Config, st *store.Store, key *identity.KeyPair, logger *slog.Logger) *Server {
-	return &Server{
-		cfg:     cfg,
+	server := &Server{
 		store:   st,
 		key:     key,
 		replay:  envelope.NewReplayGuard(envelope.ClockSkew),
@@ -76,6 +78,22 @@ func New(cfg *config.Config, st *store.Store, key *identity.KeyPair, logger *slo
 		now:     time.Now,
 		newID:   newChannelID,
 	}
+	server.settings.Store(cfg)
+	return server
+}
+
+// Settings 返回当前生效的配置。
+func (s *Server) Settings() *config.Config {
+	return s.settings.Load()
+}
+
+// Reload 换用一份新配置，使各项上限与传输级别立即生效。
+//
+// 监听地址与证书在进程启动时已经就位，重载改不动它们，那需要重启。
+// 限流的计数会随重载清零：重载本就罕见，不值得为保住计数引入一套并行的生命周期。
+func (s *Server) Reload(settings *config.Config) {
+	s.settings.Store(settings)
+	s.limiter.setLimit(settings.Limits.RequestsPerMinute)
 }
 
 // Handler 返回可供 http.Server 使用的处理器。
@@ -111,10 +129,10 @@ func (s *Server) recoverPanics(next http.Handler) http.Handler {
 }
 
 // readSignedRequest 读取请求体与签名相关的请求头，任何一处不合规都即时回复并返回假。
-func (s *Server) readSignedRequest(w http.ResponseWriter, r *http.Request) (signedRequest, bool) {
+func (s *Server) readSignedRequest(w http.ResponseWriter, r *http.Request, cfg *config.Config) (signedRequest, bool) {
 	var request signedRequest
 
-	body, err := s.readBody(w, r)
+	body, err := s.readBody(w, r, cfg)
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
@@ -157,9 +175,9 @@ func (s *Server) readSignedRequest(w http.ResponseWriter, r *http.Request) (sign
 }
 
 // readBody 读取请求体，并施加与记录大小相称的上限。
-func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+func (s *Server) readBody(w http.ResponseWriter, r *http.Request, cfg *config.Config) ([]byte, error) {
 	// 上限留出编码开销：正文里除了记录本身，还有 JSON 结构与签名。
-	limit := int64(s.cfg.Limits.RecordBytes)*4/3 + 8192
+	limit := int64(cfg.Limits.RecordBytes)*4/3 + 8192
 	return io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 }
 
@@ -253,8 +271,8 @@ func (s *Server) allowAddress(w http.ResponseWriter, r *http.Request) bool {
 // allowDestructive 拒绝在降级传输下执行破坏性操作。
 //
 // 降级意味着中间人可能在场，此时允许注册或退役，等于把设备身份交到对手手上。
-func (s *Server) allowDestructive(w http.ResponseWriter) bool {
-	if s.cfg.Transport.Degraded() {
+func (s *Server) allowDestructive(w http.ResponseWriter, cfg *config.Config) bool {
+	if cfg.Transport.Degraded() {
 		s.writeError(w, http.StatusForbidden, codeForbidden, "当前传输级别属于降级，禁止执行注册与退役")
 		return false
 	}

@@ -94,14 +94,16 @@ type retireResponse struct {
 
 // handleRegister 处理设备注册。
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	cfg := s.Settings()
+
 	if !s.allowAddress(w, r) {
 		return
 	}
-	if !s.allowDestructive(w) {
+	if !s.allowDestructive(w, cfg) {
 		return
 	}
 
-	request, ok := s.readSignedRequest(w, r)
+	request, ok := s.readSignedRequest(w, r, cfg)
 	if !ok {
 		return
 	}
@@ -110,12 +112,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, request.Body, &payload) {
 		return
 	}
+	if payload.Channel == "" {
+		s.writeError(w, http.StatusBadRequest, codeBadRequest, "缺少仓库名称")
+		return
+	}
 
-	if !s.cfg.Registration.Enabled {
+	if !cfg.Registration.Enabled {
 		s.writeError(w, http.StatusForbidden, codeForbidden, "服务端当前未开放注册")
 		return
 	}
-	if config.DigestCredential(payload.Credential) != s.cfg.Registration.CredentialDigest {
+	if config.DigestCredential(payload.Credential) != cfg.Registration.CredentialDigest {
 		s.writeError(w, http.StatusUnauthorized, codeUnauthorized, "注册凭证不正确")
 		return
 	}
@@ -162,7 +168,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, err)
 		return
 	}
-	if count >= s.cfg.Limits.DevicesPerChannel {
+	if count >= cfg.Limits.DevicesPerChannel {
 		s.writeError(w, http.StatusConflict, codeLimit, "频道内设备数已达上限")
 		return
 	}
@@ -184,11 +190,13 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 // handleReport 处理状态上报，并把频道内其他设备的状态一并回送。
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
+	cfg := s.Settings()
+
 	if !s.allowAddress(w, r) {
 		return
 	}
 
-	request, ok := s.readSignedRequest(w, r)
+	request, ok := s.readSignedRequest(w, r, cfg)
 	if !ok {
 		return
 	}
@@ -224,7 +232,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, codeBadRequest, "记录内容编码不合规")
 		return
 	}
-	if len(recordPayload) > s.cfg.Limits.RecordBytes {
+	if len(recordPayload) > cfg.Limits.RecordBytes {
 		s.writeError(w, http.StatusRequestEntityTooLarge, codeLimit, "记录内容超过允许大小")
 		return
 	}
@@ -304,14 +312,16 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 
 // handleRevoke 处理吊销请求。
 func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
+	cfg := s.Settings()
+
 	if !s.allowAddress(w, r) {
 		return
 	}
-	if !s.allowDestructive(w) {
+	if !s.allowDestructive(w, cfg) {
 		return
 	}
 
-	request, ok := s.readSignedRequest(w, r)
+	request, ok := s.readSignedRequest(w, r, cfg)
 	if !ok {
 		return
 	}
@@ -365,14 +375,16 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 
 // handleRetire 处理设备退役：删除自己的记录、移出设备列表并记入吊销，一步不可回退。
 func (s *Server) handleRetire(w http.ResponseWriter, r *http.Request) {
+	cfg := s.Settings()
+
 	if !s.allowAddress(w, r) {
 		return
 	}
-	if !s.allowDestructive(w) {
+	if !s.allowDestructive(w, cfg) {
 		return
 	}
 
-	request, ok := s.readSignedRequest(w, r)
+	request, ok := s.readSignedRequest(w, r, cfg)
 	if !ok {
 		return
 	}
@@ -413,13 +425,9 @@ func (s *Server) handleRetire(w http.ResponseWriter, r *http.Request) {
 
 // channelByName 找出以该名称作为别名的频道，没有则建立。
 //
-// 别名相同即视为同一个仓库；两台设备同时以同一名称注册时有可能各建一个频道，
-// 但注册本是罕见动作，这里不为它引入额外的协调。
+// 调用方已保证名称非空。别名相同即视为同一个仓库；两台设备同时以同一名称注册时
+// 有可能各建一个频道，但注册本是罕见动作，这里不为它引入额外的协调。
 func (s *Server) channelByName(alias string) (store.Channel, error) {
-	if alias == "" {
-		return store.Channel{}, errors.New("缺少仓库名称")
-	}
-
 	channels, err := s.store.Channels()
 	if err != nil {
 		return store.Channel{}, err

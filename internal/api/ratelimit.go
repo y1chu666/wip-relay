@@ -27,6 +27,14 @@ func newLimiter(limit int) *limiter {
 	return &limiter{limit: limit, buckets: make(map[string]*bucket)}
 }
 
+// setLimit 换用新的配额，供配置重载使用。
+func (l *limiter) setLimit(limit int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.limit = limit
+}
+
 // allow 报告该键在当前周期内是否还有配额。
 func (l *limiter) allow(key string, now time.Time) bool {
 	l.mu.Lock()
