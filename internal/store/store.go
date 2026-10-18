@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"time"
@@ -93,6 +95,13 @@ type Store struct {
 
 // Open 打开存储文件，文件不存在时创建。
 func Open(path string) (*Store, error) {
+	// 数据目录可能尚未建好：让程序自己备好它，比要求运维先手工创建更可靠。
+	if dir := filepath.Dir(path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("建立数据目录 %s：%w", dir, err)
+		}
+	}
+
 	// 文件已被占用时等待一秒即放弃：宁可启动失败，也不要长时间挂住不动。
 	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: time.Second})
 	if err != nil {

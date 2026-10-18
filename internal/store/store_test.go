@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -424,6 +425,86 @@ func TestDataSurvivesReopen(t *testing.T) {
 	}
 	if record.Sequence != 7 {
 		t.Fatalf("重新打开后记录序号为 %d，期望 7", record.Sequence)
+	}
+}
+
+// TestCorruptEntriesAreReported 检查存储被外部改动或磁盘损坏时如实报错，
+// 而不是把这些条目当作不存在而静默略过。
+func TestCorruptEntriesAreReported(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "waystation.db")
+
+	first, err := Open(path)
+	if err != nil {
+		t.Fatalf("打开存储失败：%v", err)
+	}
+	createChannel(t, first, channelA)
+	if err := first.AddDevice(channelA, sampleDevice(deviceA)); err != nil {
+		t.Fatalf("添加设备失败：%v", err)
+	}
+	if _, err := first.PutRecord(channelA, sampleRecord(deviceA, 1)); err != nil {
+		t.Fatalf("写入记录失败：%v", err)
+	}
+	if err := first.Revoke(channelA, Revocation{Fingerprint: deviceA}); err != nil {
+		t.Fatalf("吊销失败：%v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("关闭存储失败：%v", err)
+	}
+
+	db, err := bolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatalf("打开存储文件失败：%v", err)
+	}
+	if err := db.Update(func(tx *bolt.Tx) error {
+		if err := tx.Bucket([]byte(channelBucket)).Put([]byte(channelA), []byte("不是 JSON")); err != nil {
+			return err
+		}
+		if err := tx.Bucket([]byte(recordBucket)).Put(scopedKey(channelA, deviceA), []byte("不是 JSON")); err != nil {
+			return err
+		}
+		return tx.Bucket([]byte(revokedBucket)).Put(scopedKey(channelA, deviceA), []byte("不是 JSON"))
+	}); err != nil {
+		t.Fatalf("写入损坏内容失败：%v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("关闭存储文件失败：%v", err)
+	}
+
+	second, err := Open(path)
+	if err != nil {
+		t.Fatalf("重新打开存储失败：%v", err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+
+	calls := map[string]func() error{
+		"读取频道": func() error { _, err := second.Channel(channelA); return err },
+		"列出频道": func() error { _, err := second.Channels(); return err },
+		"列出记录": func() error { _, err := second.Records(channelA); return err },
+		"列出吊销": func() error { _, err := second.Revocations(channelA); return err },
+		"写入记录": func() error { _, err := second.PutRecord(channelA, sampleRecord(deviceA, 2)); return err },
+	}
+	for name, call := range calls {
+		if err := call(); err == nil {
+			t.Errorf("存储内容损坏时「%s」应当报错", name)
+		}
+	}
+}
+
+// TestOpenCreatesMissingDirectories 检查数据目录尚未建立时也能直接打开，
+// 否则首次部署必须先手工建目录。
+func TestOpenCreatesMissingDirectories(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data", "nested", "waystation.db")
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("打开存储失败：%v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("关闭存储失败：%v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("存储文件未建立：%v", err)
 	}
 }
 
