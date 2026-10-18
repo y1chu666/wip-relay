@@ -182,13 +182,12 @@ func (e *testEnv) verifyResponse(header http.Header, status int, body []byte) {
 }
 
 // register 注册一台设备，并返回频道标识。
-func (e *testEnv) register(key *identity.KeyPair, label string) string {
+func (e *testEnv) register(key *identity.KeyPair) string {
 	e.t.Helper()
 
 	status, body, header := e.call(key, pathRegister, registerRequest{
 		Channel:    testChannel,
 		Credential: testCredential,
-		Label:      label,
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
 	if status != http.StatusOK {
@@ -251,7 +250,7 @@ func TestRegisterCreatesChannelAndDevice(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
 
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	if channelID == "" {
 		t.Fatal("频道标识为空")
@@ -268,8 +267,8 @@ func TestRegisterCreatesChannelAndDevice(t *testing.T) {
 func TestRegisterJoinsExistingChannel(t *testing.T) {
 	env := newEnv(t, nil)
 
-	first := env.register(newKey(t), "device-a")
-	second := env.register(newKey(t), "device-b")
+	first := env.register(newKey(t))
+	second := env.register(newKey(t))
 
 	if first != second {
 		t.Fatalf("同名仓库应当共用频道，实际为 %s 与 %s", first, second)
@@ -280,8 +279,8 @@ func TestRegisterIsIdempotent(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
 
-	first := env.register(key, "device-a")
-	second := env.register(key, "device-a")
+	first := env.register(key)
+	second := env.register(key)
 
 	if first != second {
 		t.Fatalf("重复注册返回的频道不同：%s 与 %s", first, second)
@@ -302,7 +301,6 @@ func TestRegisterRejectsWrongCredential(t *testing.T) {
 	status, body, _ := env.call(key, pathRegister, registerRequest{
 		Channel:    testChannel,
 		Credential: "错误的凭证",
-		Label:      "device-a",
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
 
@@ -321,7 +319,6 @@ func TestRegisterRejectsWhenDisabled(t *testing.T) {
 	status, body, _ := env.call(key, pathRegister, registerRequest{
 		Channel:    testChannel,
 		Credential: testCredential,
-		Label:      "device-a",
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
 
@@ -337,7 +334,6 @@ func TestRegisterRejectsDegradedTransport(t *testing.T) {
 	status, body, _ := env.call(key, pathRegister, registerRequest{
 		Channel:    testChannel,
 		Credential: testCredential,
-		Label:      "device-a",
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
 
@@ -355,7 +351,6 @@ func TestRegisterRejectsMismatchedFingerprint(t *testing.T) {
 	status, body, _ := env.call(key, pathRegister, registerRequest{
 		Channel:    testChannel,
 		Credential: testCredential,
-		Label:      "device-a",
 		PublicKey:  base64.StdEncoding.EncodeToString(other.Public()),
 	})
 
@@ -367,17 +362,32 @@ func TestRegisterRejectsUnknownField(t *testing.T) {
 	key := newKey(t)
 
 	body := []byte(`{"channel":"` + testChannel + `","credential":"` + testCredential +
-		`","label":"device-a","public_key":"","extra":1}`)
+		`","public_key":"","extra":1}`)
 	status, response, _ := env.callAt(key, pathRegister, body, env.now, mustNonce(t))
 
 	expectStatus(t, status, response, http.StatusBadRequest)
 }
 
+func TestRegisterRejectsDeviceName(t *testing.T) {
+	env := newEnv(t, nil)
+	key := newKey(t)
+
+	// 其余字段都合规，签名也成立，唯一的问题是多了一个名称。
+	body := []byte(`{"channel":"` + testChannel + `","credential":"` + testCredential +
+		`","label":"device-a","public_key":"` + base64.StdEncoding.EncodeToString(key.Public()) + `"}`)
+	status, response, _ := env.callAt(key, pathRegister, body, env.now, mustNonce(t))
+
+	expectStatus(t, status, response, http.StatusBadRequest)
+	if code := errorCode(t, response); code != codeBadRequest {
+		t.Fatalf("错误代码为 %q，期望 %q", code, codeBadRequest)
+	}
+}
+
 func TestRegisterRejectsAfterRevocation(t *testing.T) {
 	env := newEnv(t, nil)
 	first, second := newKey(t), newKey(t)
-	channelID := env.register(first, "device-a")
-	env.register(second, "device-b")
+	channelID := env.register(first)
+	env.register(second)
 
 	status, body, _ := env.call(second, pathRevoke, revokeRequest{ChannelID: channelID, Target: first.Fingerprint().String()})
 	expectStatus(t, status, body, http.StatusOK)
@@ -385,7 +395,6 @@ func TestRegisterRejectsAfterRevocation(t *testing.T) {
 	status, body, _ = env.call(first, pathRegister, registerRequest{
 		Channel:    testChannel,
 		Credential: testCredential,
-		Label:      "device-a",
 		PublicKey:  base64.StdEncoding.EncodeToString(first.Public()),
 	})
 
@@ -396,13 +405,12 @@ func TestRegisterRejectsWhenChannelIsFull(t *testing.T) {
 	env := newEnv(t, func(cfg *config.Config) {
 		cfg.Limits.DevicesPerChannel = 1
 	})
-	env.register(newKey(t), "device-a")
+	env.register(newKey(t))
 	key := newKey(t)
 
 	status, body, _ := env.call(key, pathRegister, registerRequest{
 		Channel:    testChannel,
 		Credential: testCredential,
-		Label:      "device-b",
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
 
@@ -412,8 +420,8 @@ func TestRegisterRejectsWhenChannelIsFull(t *testing.T) {
 func TestReportSharesStateWithPeers(t *testing.T) {
 	env := newEnv(t, nil)
 	first, second := newKey(t), newKey(t)
-	channelID := env.register(first, "device-a")
-	env.register(second, "device-b")
+	channelID := env.register(first)
+	env.register(second)
 
 	status, body, header := env.report(first, channelID, 1, []byte("甲的密文"))
 	expectStatus(t, status, body, http.StatusOK)
@@ -447,8 +455,8 @@ func TestReportSharesStateWithPeers(t *testing.T) {
 func TestReportOnlyKeepsNewestSequence(t *testing.T) {
 	env := newEnv(t, nil)
 	first, second := newKey(t), newKey(t)
-	channelID := env.register(first, "device-a")
-	env.register(second, "device-b")
+	channelID := env.register(first)
+	env.register(second)
 
 	status, body, _ := env.report(first, channelID, 5, []byte("新的"))
 	expectStatus(t, status, body, http.StatusOK)
@@ -483,7 +491,7 @@ func TestReportOnlyKeepsNewestSequence(t *testing.T) {
 
 func TestReportRejectsUnknownDevice(t *testing.T) {
 	env := newEnv(t, nil)
-	channelID := env.register(newKey(t), "device-a")
+	channelID := env.register(newKey(t))
 
 	status, body, _ := env.report(newKey(t), channelID, 1, []byte("陌生设备的密文"))
 
@@ -496,7 +504,7 @@ func TestReportRejectsUnknownDevice(t *testing.T) {
 func TestReportRejectsTamperedBody(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	payload := env.reportPayload(key, channelID, 1, []byte("原始密文"))
 	body, err := json.Marshal(payload)
@@ -524,7 +532,7 @@ func TestReportRejectsTamperedBody(t *testing.T) {
 func TestReportRejectsBadRecordSignature(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	payload := env.reportPayload(key, channelID, 1, []byte("原始密文"))
 	// 记录内容与记录签名对不上：请求签名仍然有效，但记录签名不再成立。
@@ -541,7 +549,7 @@ func TestReportRejectsBadRecordSignature(t *testing.T) {
 func TestReportRejectsStaleTimestamp(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	payload := env.reportPayload(key, channelID, 1, []byte("密文"))
 	body, err := json.Marshal(payload)
@@ -560,7 +568,7 @@ func TestReportRejectsStaleTimestamp(t *testing.T) {
 func TestReportRejectsReplayedNonce(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	payload := env.reportPayload(key, channelID, 1, []byte("密文"))
 	body, err := json.Marshal(payload)
@@ -583,7 +591,7 @@ func TestReportRejectsReplayedNonce(t *testing.T) {
 func TestReportRejectsOversizedRecord(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	// 记录内容本身超限，但请求体尚未超过传输上限。
 	oversized := bytes.Repeat([]byte("a"), env.cfg.Limits.RecordBytes+1)
@@ -609,8 +617,8 @@ func TestReportRejectsMissingChannel(t *testing.T) {
 func TestRevokeRemovesDeviceAndKeepsRevocation(t *testing.T) {
 	env := newEnv(t, nil)
 	first, second := newKey(t), newKey(t)
-	channelID := env.register(first, "device-a")
-	env.register(second, "device-b")
+	channelID := env.register(first)
+	env.register(second)
 
 	status, body, header := env.call(second, pathRevoke, revokeRequest{ChannelID: channelID, Target: first.Fingerprint().String()})
 	expectStatus(t, status, body, http.StatusOK)
@@ -648,7 +656,7 @@ func TestRevokeRemovesDeviceAndKeepsRevocation(t *testing.T) {
 func TestRevokeRejectsLastDevice(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	status, body, _ := env.call(key, pathRevoke, revokeRequest{ChannelID: channelID, Target: key.Fingerprint().String()})
 
@@ -661,7 +669,7 @@ func TestRevokeRejectsLastDevice(t *testing.T) {
 func TestRevokeRejectsUnknownTarget(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	status, body, _ := env.call(key, pathRevoke, revokeRequest{ChannelID: channelID, Target: newKey(t).Fingerprint().String()})
 
@@ -671,8 +679,8 @@ func TestRevokeRejectsUnknownTarget(t *testing.T) {
 func TestRevokeRejectsDegradedTransport(t *testing.T) {
 	env := newEnv(t, nil)
 	first, second := newKey(t), newKey(t)
-	channelID := env.register(first, "device-a")
-	env.register(second, "device-b")
+	channelID := env.register(first)
+	env.register(second)
 
 	env.cfg.Transport = config.Transport{Mode: config.ModePlaintext}
 	status, body, _ := env.call(second, pathRevoke, revokeRequest{ChannelID: channelID, Target: first.Fingerprint().String()})
@@ -683,7 +691,7 @@ func TestRevokeRejectsDegradedTransport(t *testing.T) {
 func TestRetireRemovesDeviceAndRecord(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 	status, body, _ := env.report(key, channelID, 1, []byte("密文"))
 	expectStatus(t, status, body, http.StatusOK)
 
@@ -706,7 +714,7 @@ func TestRetireRemovesDeviceAndRecord(t *testing.T) {
 func TestRetireRejectsDegradedTransport(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	env.cfg.Transport = config.Transport{Mode: config.ModeInsecure}
 	status, body, _ := env.call(key, pathRetire, retireRequest{ChannelID: channelID})
@@ -723,7 +731,7 @@ func TestRateLimitApplies(t *testing.T) {
 		cfg.Limits.RequestsPerMinute = 2
 	})
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	status, body, _ := env.report(key, channelID, 1, []byte("密文"))
 	expectStatus(t, status, body, http.StatusOK)
@@ -743,7 +751,7 @@ func TestRateLimitAppliesToDestructiveCommands(t *testing.T) {
 		cfg.Limits.RequestsPerMinute = 1
 	})
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	status, body, _ := env.call(key, pathRevoke, revokeRequest{ChannelID: channelID, Target: key.Fingerprint().String()})
 	expectStatus(t, status, body, http.StatusTooManyRequests)
@@ -755,7 +763,6 @@ func TestRateLimitAppliesToDestructiveCommands(t *testing.T) {
 	status, body, _ = env.call(other, pathRegister, registerRequest{
 		Channel:    testChannel,
 		Credential: testCredential,
-		Label:      "device-b",
 		PublicKey:  base64.StdEncoding.EncodeToString(other.Public()),
 	})
 	expectStatus(t, status, body, http.StatusTooManyRequests)
@@ -767,7 +774,6 @@ func TestRegisterRejectsMissingChannelName(t *testing.T) {
 
 	status, body, _ := env.call(key, pathRegister, registerRequest{
 		Credential: testCredential,
-		Label:      "device-a",
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
 
@@ -837,7 +843,7 @@ func TestRequestBodyTooLargeIsRejected(t *testing.T) {
 		cfg.Limits.RecordBytes = 64
 	})
 	key := newKey(t)
-	env.register(key, "device-a")
+	env.register(key)
 
 	oversized := bytes.Repeat([]byte("a"), 64*4/3+8192+1)
 	status, body, _ := env.callAt(key, pathReport, oversized, env.now, mustNonce(t))
@@ -876,7 +882,7 @@ func TestUnreadableBodyIsRejected(t *testing.T) {
 func TestReportRejectsMalformedFields(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	cases := map[string]func(*reportRequest){
 		"采集时间不可解析":   func(p *reportRequest) { p.CollectedAt = "昨天" },
@@ -911,7 +917,6 @@ func TestRegisterRejectsMalformedPublicKey(t *testing.T) {
 			status, body, _ := env.call(key, pathRegister, registerRequest{
 				Channel:    testChannel,
 				Credential: testCredential,
-				Label:      "device-a",
 				PublicKey:  publicKey,
 			})
 
@@ -929,7 +934,6 @@ func TestRegisterReportsInternalFailure(t *testing.T) {
 	status, body, _ := env.call(key, pathRegister, registerRequest{
 		Channel:    testChannel,
 		Credential: testCredential,
-		Label:      "device-a",
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
 
@@ -942,7 +946,7 @@ func TestRegisterReportsInternalFailure(t *testing.T) {
 func TestRevokeRejectsMalformedTarget(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	status, body, _ := env.call(key, pathRevoke, revokeRequest{ChannelID: channelID, Target: "不合规"})
 
@@ -970,7 +974,7 @@ func TestRetireRejectsMissingChannel(t *testing.T) {
 func TestRetireWithoutRecordSucceeds(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	status, body, _ := env.call(key, pathRetire, retireRequest{ChannelID: channelID})
 
@@ -983,7 +987,7 @@ func TestRateLimitWindowResets(t *testing.T) {
 		cfg.Limits.RequestsPerMinute = 2
 	})
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	status, body, _ := env.report(key, channelID, 1, []byte("密文"))
 	expectStatus(t, status, body, http.StatusOK)
@@ -1004,7 +1008,7 @@ func TestRateLimitAppliesToDevice(t *testing.T) {
 		cfg.Limits.RequestsPerMinute = 2
 	})
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	for i := 1; i <= 2; i++ {
 		env.remoteAddr = "192.0.2." + strconv.Itoa(10+i) + ":1234"
@@ -1022,7 +1026,7 @@ func TestRateLimitAppliesToDevice(t *testing.T) {
 func TestSourceAddressWithoutPortIsAccepted(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)
-	channelID := env.register(key, "device-a")
+	channelID := env.register(key)
 
 	env.remoteAddr = "192.0.2.10"
 	status, body, _ := env.report(key, channelID, 1, []byte("密文"))
@@ -1043,7 +1047,6 @@ func TestCorruptedPublicKeyIsReportedAsInternalError(t *testing.T) {
 	device := store.Device{
 		Fingerprint:  key.Fingerprint(),
 		PublicKey:    []byte("长度不对的公钥"),
-		Label:        "device-a",
 		RegisteredAt: env.now,
 	}
 	if err := env.store.AddDevice(channel.ID, device); err != nil {
@@ -1067,7 +1070,6 @@ func TestPanicIsContained(t *testing.T) {
 	status, body, _ := env.call(key, pathRegister, registerRequest{
 		Channel:    testChannel,
 		Credential: testCredential,
-		Label:      "device-a",
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
 
@@ -1092,13 +1094,12 @@ func TestReloadSwapsSettingsAndLimit(t *testing.T) {
 	}
 
 	// 配额降到每分钟一次后，同一来源地址的第二次请求即被挡下。
-	env.register(newKey(t), "device-a")
+	env.register(newKey(t))
 
 	key := newKey(t)
 	status, body, _ := env.call(key, pathRegister, registerRequest{
 		Channel:    testChannel,
 		Credential: testCredential,
-		Label:      "device-b",
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
 	expectStatus(t, status, body, http.StatusTooManyRequests)

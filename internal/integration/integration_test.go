@@ -194,13 +194,12 @@ func (h *harness) verifyResponse(response *http.Response, body []byte) {
 }
 
 // register 注册一台设备，返回频道标识。
-func (h *harness) register(key *identity.KeyPair, label string) string {
+func (h *harness) register(key *identity.KeyPair) string {
 	h.t.Helper()
 
 	status, body := h.call(key, "/v1/register", map[string]string{
 		"channel":    "vault-example",
 		"credential": credential,
-		"label":      label,
 		"public_key": base64.StdEncoding.EncodeToString(key.Public()),
 	})
 	if status != http.StatusOK {
@@ -275,8 +274,8 @@ func TestExchangeOverPinnedTLS(t *testing.T) {
 	first, second := newKey(t), newKey(t)
 
 	// 两台设备以同一枚凭证注册到同一仓库，得到同一个频道。
-	channel := h.register(first, "device-a")
-	if other := h.register(second, "device-b"); other != channel {
+	channel := h.register(first)
+	if other := h.register(second); other != channel {
 		t.Fatalf("两台设备得到了不同的频道：%s 与 %s", channel, other)
 	}
 
@@ -341,8 +340,8 @@ func TestExchangeOverPinnedTLS(t *testing.T) {
 func TestRejectedReportReturnsOwnRecord(t *testing.T) {
 	h := start(t)
 	first, second := newKey(t), newKey(t)
-	channel := h.register(first, "device-a")
-	h.register(second, "device-b")
+	channel := h.register(first)
+	h.register(second)
 
 	if status, _ := h.report(first, channel, 4, []byte("既有的密文")); status != http.StatusOK {
 		t.Fatalf("首次上报失败：状态 %d", status)
@@ -373,8 +372,8 @@ func TestRejectedReportReturnsOwnRecord(t *testing.T) {
 func TestRevocationIsVisibleToPeers(t *testing.T) {
 	h := start(t)
 	first, second := newKey(t), newKey(t)
-	channel := h.register(first, "device-a")
-	h.register(second, "device-b")
+	channel := h.register(first)
+	h.register(second)
 
 	status, body := h.call(second, "/v1/revoke", map[string]string{
 		"channel_id": channel,
@@ -402,7 +401,7 @@ func TestRevocationIsVisibleToPeers(t *testing.T) {
 func TestReloadRequestFileTakesEffect(t *testing.T) {
 	h := start(t)
 	key := newKey(t)
-	h.register(key, "device-a")
+	h.register(key)
 
 	// 关闭注册，并用重载请求让它生效：服务端应当读到新配置，拒绝后续注册。
 	settings, err := config.Load(h.configPath)
@@ -423,7 +422,6 @@ func TestReloadRequestFileTakesEffect(t *testing.T) {
 	status, _ := h.call(newKey(t), "/v1/register", map[string]string{
 		"channel":    "vault-example",
 		"credential": credential,
-		"label":      "device-b",
 		"public_key": "不合规",
 	})
 	if status != http.StatusForbidden {

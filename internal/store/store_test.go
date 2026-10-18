@@ -48,7 +48,6 @@ func sampleDevice(fingerprint identity.Fingerprint) Device {
 	return Device{
 		Fingerprint:  fingerprint,
 		PublicKey:    []byte("public-key"),
-		Label:        "device-a",
 		RegisteredAt: time.Unix(1700000000, 0),
 	}
 }

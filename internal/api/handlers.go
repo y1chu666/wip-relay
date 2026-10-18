@@ -31,11 +31,13 @@ type channelResponse struct {
 }
 
 // registerRequest 是注册请求。
+//
+// 请求里没有设备名称：名称由各设备写进自己那份加密内容，中继看不到，
+// 也就不必在注册时把名字交到这里。
 type registerRequest struct {
 	// Channel 是设备所报的仓库名称，服务端据此加入或建立频道。
 	Channel    string `json:"channel"`
 	Credential string `json:"credential"`
-	Label      string `json:"label"`
 	PublicKey  string `json:"public_key"`
 }
 
@@ -184,7 +186,6 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	device := store.Device{
 		Fingerprint:  request.Fingerprint,
 		PublicKey:    publicKey,
-		Label:        payload.Label,
 		RegisteredAt: s.now().UTC(),
 	}
 	if err := s.store.AddDevice(channel.ID, device); err != nil {

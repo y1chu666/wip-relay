@@ -66,7 +66,6 @@ func seed(t *testing.T, configPath string) {
 	device := store.Device{
 		Fingerprint:  seededDevice,
 		PublicKey:    []byte("public-key"),
-		Label:        "device-a",
 		RegisteredAt: time.Unix(1700000000, 0).UTC(),
 	}
 	if err := opened.AddDevice(channel.ID, device); err != nil {
@@ -190,15 +189,6 @@ func TestInitRejectsUnknownFlag(t *testing.T) {
 	}
 }
 
-func TestLabelOfFallsBackToPlaceholder(t *testing.T) {
-	if got := labelOf(""); got != "（未命名）" {
-		t.Errorf("空别名显示为 %q，期望占位说法", got)
-	}
-	if got := labelOf("device-a"); got != "device-a" {
-		t.Errorf("别名显示为 %q，期望原样输出", got)
-	}
-}
-
 func TestListReportsChannelsDevicesRecordsAndRevocations(t *testing.T) {
 	dir := t.TempDir()
 	configPath := writeConfig(t, dir)
@@ -209,7 +199,7 @@ func TestListReportsChannelsDevicesRecordsAndRevocations(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("退出码为 %d，期望 %d；标准错误 %q", code, exitOK, stderr)
 	}
-	for _, want := range []string{string(seededChannel), "vault-example", seededDevice.String(), "device-a", "序号 3", seededPeer.String(), "吊销名单 1 条"} {
+	for _, want := range []string{string(seededChannel), "vault-example", seededDevice.String(), "序号 3", seededPeer.String(), "吊销名单 1 条"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("标准输出不含 %q：\n%s", want, stdout)
 		}

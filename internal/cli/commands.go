@@ -73,8 +73,7 @@ func runList(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "  设备 %d 台：\n", len(devices))
 		for _, device := range devices {
-			fmt.Fprintf(stdout, "    %s  %s  注册于 %s\n",
-				device.Fingerprint, labelOf(device.Label), stamp(device.RegisteredAt))
+			fmt.Fprintf(stdout, "    %s  注册于 %s\n", device.Fingerprint, stamp(device.RegisteredAt))
 		}
 
 		records, err := opened.Records(channel.ID)
@@ -130,14 +129,6 @@ func runRecover(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stdout, "已把 %s 移出频道 %s 的吊销名单；该设备需要重新注册才能继续使用。\n", fingerprint, *channel)
 	return exitOK
-}
-
-// labelOf 在设备没有别名时给一个占位说法，避免输出出现空档。
-func labelOf(label string) string {
-	if label == "" {
-		return "（未命名）"
-	}
-	return label
 }
 
 // stamp 统一把时间折算为协调世界时输出。

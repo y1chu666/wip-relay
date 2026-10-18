@@ -67,7 +67,6 @@ type Channel struct {
 type Device struct {
 	Fingerprint  identity.Fingerprint
 	PublicKey    []byte
-	Label        string
 	RegisteredAt time.Time
 }
 
