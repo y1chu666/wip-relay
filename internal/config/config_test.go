@@ -57,6 +57,44 @@ func TestTemplateIsValid(t *testing.T) {
 	}
 }
 
+func TestWithCredentialEnablesRegistration(t *testing.T) {
+	text, err := WithCredential("credential-for-tests")
+	if err != nil {
+		t.Fatalf("生成带凭证的配置失败：%v", err)
+	}
+
+	cfg := mustParse(t, text)
+	if !cfg.Registration.Enabled {
+		t.Fatal("生成的配置未开启注册")
+	}
+	if cfg.Registration.CredentialDigest != DigestCredential("credential-for-tests") {
+		t.Fatalf("凭证摘要不符：%q", cfg.Registration.CredentialDigest)
+	}
+	if !strings.Contains(text, "#") {
+		t.Error("生成的配置丢失了样例中的注释")
+	}
+}
+
+func TestWithCredentialRejectsEmpty(t *testing.T) {
+	if _, err := WithCredential(""); err == nil {
+		t.Fatal("空凭证应当被拒绝")
+	}
+}
+
+func TestPathHelpers(t *testing.T) {
+	cfg := mustParse(t, minimal)
+
+	for name, path := range map[string]string{
+		"存储":   cfg.StorePath(),
+		"密钥":   cfg.KeyPath(),
+		"重载请求": cfg.ReloadRequestPath(),
+	} {
+		if filepath.Dir(path) != filepath.Clean(cfg.Server.DataDir) {
+			t.Errorf("%s路径 %q 不在数据目录 %q 之内", name, path, cfg.Server.DataDir)
+		}
+	}
+}
+
 func TestParseRejectsUnknownKey(t *testing.T) {
 	_, err := Parse([]byte(minimal + "\n[extra]\nfoo = 1\n"))
 

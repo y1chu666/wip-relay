@@ -192,6 +192,56 @@ func Template() string {
 	return example
 }
 
+// WithCredential 在配置样例的基础上开启注册，并写入凭证摘要。
+//
+// 这里直接改写样例文本，为的是保留样例里的注释：样例是给人读的，注释比字段本身更值得留下。
+// 若样例措辞有变导致改写落空，这里会明确报错，而不是给出一份注册仍然关闭的配置。
+func WithCredential(credential string) (string, error) {
+	if credential == "" {
+		return "", errors.New("注册凭证不得为空")
+	}
+
+	const (
+		registrationOff = "enabled = false"
+		emptyDigest     = `credential_digest = ""`
+	)
+	if !strings.Contains(example, registrationOff) || !strings.Contains(example, emptyDigest) {
+		return "", errors.New("配置样例已改，无法写入注册凭证")
+	}
+
+	text := strings.Replace(example, registrationOff, "enabled = true", 1)
+	text = strings.Replace(text, emptyDigest, `credential_digest = "`+DigestCredential(credential)+`"`, 1)
+
+	cfg, err := Parse([]byte(text))
+	if err != nil {
+		return "", fmt.Errorf("生成的配置未通过校验：%w", err)
+	}
+	if !cfg.Registration.Enabled {
+		return "", errors.New("生成的配置未开启注册")
+	}
+	return text, nil
+}
+
+// StorePath 返回存储文件的位置。存储与配置文件分开放置，二者各有各的备份节奏。
+func (c *Config) StorePath() string {
+	return filepath.Join(c.Server.DataDir, "store.db")
+}
+
+// KeyPath 返回服务端密钥文件的位置。
+//
+// 密钥一经生成不再更换：客户端在首次配对时钉住这把公钥，换了就等于换了服务端。
+func (c *Config) KeyPath() string {
+	return filepath.Join(c.Server.DataDir, "server.key")
+}
+
+// ReloadRequestPath 返回重载请求文件的位置。
+//
+// 重载靠文件握手，不用信号，也不额外开放管理入口：各平台行为一致，
+// 而能写数据目录的人本来就已掌握这台机器。
+func (c *Config) ReloadRequestPath() string {
+	return filepath.Join(c.Server.DataDir, "reload.request")
+}
+
 // DigestCredential 返回注册凭证的摘要。
 //
 // 服务端只保存摘要而不保存原文，因此这里必须使用单向散列。
