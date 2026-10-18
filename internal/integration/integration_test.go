@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
@@ -249,15 +250,19 @@ func (h *harness) report(key *identity.KeyPair, channelID string, sequence int64
 	return status, response
 }
 
+type recordDTO struct {
+	Fingerprint string `json:"fingerprint"`
+	PublicKey   string `json:"public_key"`
+	Sequence    int64  `json:"sequence"`
+	CollectedAt string `json:"collected_at"`
+	Payload     string `json:"payload"`
+	Signature   string `json:"signature"`
+}
+
 type reportResponse struct {
-	Accepted bool `json:"accepted"`
-	Records  []struct {
-		Fingerprint string `json:"fingerprint"`
-		Sequence    int64  `json:"sequence"`
-		CollectedAt string `json:"collected_at"`
-		Payload     string `json:"payload"`
-		Signature   string `json:"signature"`
-	} `json:"records"`
+	Accepted    bool        `json:"accepted"`
+	Own         *recordDTO  `json:"own"`
+	Records     []recordDTO `json:"records"`
 	Revocations []struct {
 		Fingerprint string `json:"fingerprint"`
 		By          string `json:"by"`
@@ -320,8 +325,48 @@ func TestExchangeOverPinnedTLS(t *testing.T) {
 		CollectedAt: collectedAt,
 		Payload:     peerPayload,
 	}
-	if err := record.Verify(first.Public(), peerSignature); err != nil {
+	// 核对签名所用的公钥取自回应本身，与设备甲的公钥一致。
+	peerPublicKey, err := base64.StdEncoding.DecodeString(peer.PublicKey)
+	if err != nil {
+		t.Fatalf("对端公钥编码不合规：%v", err)
+	}
+	if !bytes.Equal(peerPublicKey, first.Public()) {
+		t.Fatalf("对端公钥不符：%x", peerPublicKey)
+	}
+	if err := record.Verify(ed25519.PublicKey(peerPublicKey), peerSignature); err != nil {
 		t.Fatalf("对端记录签名校验失败：%v", err)
+	}
+}
+
+func TestRejectedReportReturnsOwnRecord(t *testing.T) {
+	h := start(t)
+	first, second := newKey(t), newKey(t)
+	channel := h.register(first, "device-a")
+	h.register(second, "device-b")
+
+	if status, _ := h.report(first, channel, 4, []byte("既有的密文")); status != http.StatusOK {
+		t.Fatalf("首次上报失败：状态 %d", status)
+	}
+
+	// 本地状态被回退时序号会落在既有记录之后，此时被拒并回送既有记录。
+	status, response := h.report(first, channel, 2, []byte("回退后的密文"))
+	if status != http.StatusOK {
+		t.Fatalf("上报失败：状态 %d", status)
+	}
+	if response.Accepted {
+		t.Fatal("序号落后于既有记录时不应被接受")
+	}
+	if response.Own == nil || response.Own.Sequence != 4 {
+		t.Fatalf("未回送本设备既有记录：%+v", response.Own)
+	}
+	if payload, err := base64.StdEncoding.DecodeString(response.Own.Payload); err != nil || string(payload) != "既有的密文" {
+		t.Fatalf("回送的既有记录内容不符：%+v", response.Own)
+	}
+
+	// 按既有记录推进序号后即可继续上报。
+	status, response = h.report(first, channel, 5, []byte("推进后的密文"))
+	if status != http.StatusOK || !response.Accepted {
+		t.Fatalf("推进序号后的上报未被接受：状态 %d，响应 %+v", status, response)
 	}
 }
 

@@ -90,7 +90,7 @@ func (s *Server) Settings() *config.Config {
 // Reload 换用一份新配置，使各项上限与传输级别立即生效。
 //
 // 监听地址与证书在进程启动时已经就位，重载改不动它们，那需要重启。
-// 限流的计数会随重载清零：重载本就罕见，不值得为保住计数引入一套并行的生命周期。
+// 限流器沿用同一个，只是换了配额：计数保留下来并无坏处，窗口一过自然清零。
 func (s *Server) Reload(settings *config.Config) {
 	s.settings.Store(settings)
 	s.limiter.setLimit(settings.Limits.RequestsPerMinute)

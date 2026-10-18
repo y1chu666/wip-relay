@@ -438,6 +438,10 @@ func TestReportSharesStateWithPeers(t *testing.T) {
 	if payload, err := base64.StdEncoding.DecodeString(response.Records[0].Payload); err != nil || string(payload) != "甲的密文" {
 		t.Fatalf("对端记录内容不符：%+v", response.Records[0])
 	}
+	// 对端公钥随记录回送，接收方才能核对记录签名。
+	if response.Records[0].PublicKey != base64.StdEncoding.EncodeToString(first.Public()) {
+		t.Fatalf("对端记录未带上公钥：%+v", response.Records[0])
+	}
 }
 
 func TestReportOnlyKeepsNewestSequence(t *testing.T) {
@@ -466,6 +470,14 @@ func TestReportOnlyKeepsNewestSequence(t *testing.T) {
 	}
 	if string(record.Payload) != "新的" {
 		t.Fatalf("既有记录被同序号的上报覆盖：%+v", record)
+	}
+
+	// 被拒时回送本设备既有记录：设备本地状态被回退时，只有拿到它才知道该从哪里继续。
+	if response.Own == nil {
+		t.Fatal("被拒时未回送本设备既有记录")
+	}
+	if response.Own.Sequence != 5 || response.Own.Payload != base64.StdEncoding.EncodeToString([]byte("新的")) {
+		t.Fatalf("回送的既有记录不符：%+v", response.Own)
 	}
 }
 
@@ -1062,5 +1074,35 @@ func TestPanicIsContained(t *testing.T) {
 	expectStatus(t, status, body, http.StatusInternalServerError)
 	if code := errorCode(t, body); code != codeInternal {
 		t.Fatalf("错误代码为 %q，期望 %q", code, codeInternal)
+	}
+}
+
+func TestReloadSwapsSettingsAndLimit(t *testing.T) {
+	env := newEnv(t, nil)
+
+	settings := *env.cfg
+	settings.Limits.RequestsPerMinute = 1
+	env.server.Reload(&settings)
+
+	if got := env.server.Settings().Limits.RequestsPerMinute; got != 1 {
+		t.Fatalf("重载后每台设备的配额为 %d，期望 1", got)
+	}
+	if got := env.server.limiter.limit; got != 1 {
+		t.Fatalf("限流器的配额为 %d，期望 1", got)
+	}
+
+	// 配额降到每分钟一次后，同一来源地址的第二次请求即被挡下。
+	env.register(newKey(t), "device-a")
+
+	key := newKey(t)
+	status, body, _ := env.call(key, pathRegister, registerRequest{
+		Channel:    testChannel,
+		Credential: testCredential,
+		Label:      "device-b",
+		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
+	})
+	expectStatus(t, status, body, http.StatusTooManyRequests)
+	if code := errorCode(t, body); code != codeLimit {
+		t.Fatalf("错误代码为 %q，期望 %q", code, codeLimit)
 	}
 }

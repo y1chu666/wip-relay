@@ -49,8 +49,12 @@ type reportRequest struct {
 }
 
 // recordDTO 是一条状态记录。
+//
+// 公钥随记录一并给出，使接收方得以核对记录签名，确认它确实出自该设备；
+// 客户端首次见到某台设备的公钥即钉住，此后公钥变化就说明身份对不上，应当停止采用。
 type recordDTO struct {
 	Fingerprint string `json:"fingerprint"`
+	PublicKey   string `json:"public_key"`
 	Sequence    int64  `json:"sequence"`
 	CollectedAt string `json:"collected_at"`
 	Payload     string `json:"payload"`
@@ -64,9 +68,13 @@ type revocationDTO struct {
 	At          string `json:"at"`
 }
 
-// reportResponse 是上报的回复：是否被接受，以及频道内其他设备的状态与吊销名单。
+// reportResponse 是上报的回复。
+//
+// 被拒时一并回送本设备既有记录：设备本地状态被回退，或同一身份被复制到两台机器时，
+// 它的序号会落在中继已有记录之后，只有拿到既有记录才知道该从哪里继续，否则无从对齐。
 type reportResponse struct {
 	Accepted    bool            `json:"accepted"`
+	Own         *recordDTO      `json:"own,omitempty"`
 	Records     []recordDTO     `json:"records"`
 	Revocations []revocationDTO `json:"revocations"`
 }
@@ -281,6 +289,16 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	devices, err := s.store.Devices(channel)
+	if err != nil {
+		s.internal(w, err)
+		return
+	}
+	publicKeys := make(map[identity.Fingerprint]string, len(devices))
+	for _, item := range devices {
+		publicKeys[item.Fingerprint] = base64.StdEncoding.EncodeToString(item.PublicKey)
+	}
+
 	response := reportResponse{
 		Accepted:    accepted,
 		Records:     make([]recordDTO, 0, len(records)),
@@ -288,16 +306,20 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, item := range records {
 		// 不回送调用者自己的记录：它比谁都清楚自己刚才上报了什么。
+		// 唯一的例外是上报被拒：此时它并不知道中继上的序号是多少。
 		if item.Fingerprint == device.Fingerprint {
 			continue
 		}
-		response.Records = append(response.Records, recordDTO{
-			Fingerprint: item.Fingerprint.String(),
-			Sequence:    item.Sequence,
-			CollectedAt: item.CollectedAt.UTC().Format(time.RFC3339),
-			Payload:     base64.StdEncoding.EncodeToString(item.Payload),
-			Signature:   base64.StdEncoding.EncodeToString(item.Signature),
-		})
+		response.Records = append(response.Records, toRecordDTO(item, publicKeys[item.Fingerprint]))
+	}
+	if !accepted {
+		existing, err := s.store.Record(channel, device.Fingerprint)
+		if err != nil {
+			s.internal(w, err)
+			return
+		}
+		own := toRecordDTO(existing, publicKeys[device.Fingerprint])
+		response.Own = &own
 	}
 	for _, item := range revocations {
 		response.Revocations = append(response.Revocations, revocationDTO{
@@ -308,6 +330,19 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, response)
+}
+
+// toRecordDTO 把库中的记录整理成回复里的形状。公钥可能缺失，此时留空，
+// 由客户端判断该条记录无法核对而暂时不用。
+func toRecordDTO(record store.Record, publicKey string) recordDTO {
+	return recordDTO{
+		Fingerprint: record.Fingerprint.String(),
+		PublicKey:   publicKey,
+		Sequence:    record.Sequence,
+		CollectedAt: record.CollectedAt.UTC().Format(time.RFC3339),
+		Payload:     base64.StdEncoding.EncodeToString(record.Payload),
+		Signature:   base64.StdEncoding.EncodeToString(record.Signature),
+	}
 }
 
 // handleRevoke 处理吊销请求。
