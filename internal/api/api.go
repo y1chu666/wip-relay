@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -32,6 +33,9 @@ const (
 	headerTimestamp   = "X-Waystation-Timestamp"
 	headerNonce       = "X-Waystation-Nonce"
 	headerSignature   = "X-Waystation-Signature"
+	// headerPublicKey 随每次回应给出服务端公钥，供客户端首次配对时钉住。
+	// 公钥本就不必保密，放在这里省去一个只为取公钥而设的端点。
+	headerPublicKey = "X-Waystation-Public-Key"
 )
 
 // 错误代码。客户端按代码判断，不解析文案。
@@ -321,6 +325,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, payload any) {
 	}
 
 	w.Header().Set(headerFingerprint, response.Fingerprint.String())
+	w.Header().Set(headerPublicKey, base64.StdEncoding.EncodeToString(s.key.Public()))
 	w.Header().Set(headerSignature, hex.EncodeToString(response.Signature(s.key)))
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

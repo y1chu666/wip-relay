@@ -175,6 +175,15 @@ func (e *testEnv) verifyResponse(header http.Header, status int, body []byte) {
 		e.t.Fatalf("响应头中的签名编码不合规：%v", err)
 	}
 
+	// 公钥随回应给出，客户端首次配对时据此钉住。
+	publicKey, err := base64.StdEncoding.DecodeString(header.Get(headerPublicKey))
+	if err != nil {
+		e.t.Fatalf("响应头中的公钥编码不合规：%v", err)
+	}
+	if !bytes.Equal(publicKey, e.server.key.Public()) {
+		e.t.Fatalf("响应头中的公钥与服务端公钥不符")
+	}
+
 	response := envelope.Response{Fingerprint: fingerprint, Status: status, Body: body}
 	if err := response.Verify(e.server.key.Fingerprint(), e.server.key.Public(), signature); err != nil {
 		e.t.Fatalf("响应签名校验失败：%v", err)
