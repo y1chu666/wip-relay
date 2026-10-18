@@ -31,8 +31,10 @@ const defaultConfigPath = "waystation.toml"
 const usage = `用法：waystation <子命令> [选项]
 
 子命令：
+  serve     启动中继服务
   init      生成配置样例，并写下一枚注册凭证
   list      列出频道、设备、状态记录与吊销名单
+  reload    请正在运行的服务重新读取配置
   recover   把设备移出吊销名单
   version   输出版本信息
   help      输出本说明
@@ -57,10 +59,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
+	case "serve":
+		return runServe(args[1:], stdout, stderr)
 	case "init":
 		return runInit(args[1:], stdout, stderr)
 	case "list":
 		return runList(args[1:], stdout, stderr)
+	case "reload":
+		return runReload(args[1:], stdout, stderr)
 	case "recover":
 		return runRecover(args[1:], stdout, stderr)
 	default:
