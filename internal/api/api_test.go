@@ -1116,3 +1116,36 @@ func TestReloadSwapsSettingsAndLimit(t *testing.T) {
 		t.Fatalf("错误代码为 %q，期望 %q", code, codeLimit)
 	}
 }
+
+func TestRateLimitIgnoresUnverifiedDeviceRequests(t *testing.T) {
+	// 设备指纹在频道内是公开的。若设备维度的计数发生在验签之前，任何人只要知道
+	// 某台设备的指纹，就能把它的配额耗光，使这台设备自己也用不了中继。
+	env := newEnv(t, func(cfg *config.Config) { cfg.Limits.RequestsPerMinute = 4 })
+	key := newKey(t)
+	channelID := env.register(key)
+
+	imposter := "192.0.2.99:1234"
+	for i := 0; i < 4; i++ {
+		env.remoteAddr = imposter
+		nonce, err := envelope.NewNonce()
+		if err != nil {
+			t.Fatalf("生成随机值失败：%v", err)
+		}
+		body, err := json.Marshal(env.reportPayload(key, channelID, int64(i+1), []byte("冒充")))
+		if err != nil {
+			t.Fatalf("序列化请求失败：%v", err)
+		}
+		status, _, _ := env.send(pathReport, body, key.Fingerprint(), env.now, nonce, []byte("不合规的签名"))
+		if status != http.StatusUnauthorized {
+			t.Fatalf("冒充者未被拒绝：状态 %d", status)
+		}
+	}
+
+	// 设备本人的请求来自另一个来源，配额不该被冒充者动过。
+	env.remoteAddr = "192.0.2.10:1234"
+	status, body, _ := env.report(key, channelID, 1, []byte("状态"))
+	if status != http.StatusOK {
+		t.Fatalf("设备本人的上报被限流：状态 %d，正文 %s", status, body)
+	}
+}
+

@@ -222,6 +222,10 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request, request signedRe
 }
 
 // authenticate 取出设备并完成签名校验与设备级限流。
+//
+// 设备维度的计数放在验签之后：设备指纹在频道内是公开的（对端上报时就会拿到），
+// 若先计数再验签，任何人只要知道指纹就能用它把该设备的配额耗光，属未认证的拒绝服务。
+// 验签之前的挡量由来源地址维度负责。
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, request signedRequest, channel store.ChannelID) (store.Device, bool) {
 	device, err := s.deviceFor(channel, request.Fingerprint)
 	if err != nil {
@@ -229,12 +233,12 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, request si
 		return store.Device{}, false
 	}
 
-	if !s.limiter.allow("device:"+device.Fingerprint.String(), s.now()) {
-		s.writeError(w, http.StatusTooManyRequests, codeLimit, "请求过于频繁")
+	if !s.verify(w, r, request, ed25519.PublicKey(device.PublicKey)) {
 		return store.Device{}, false
 	}
 
-	if !s.verify(w, r, request, ed25519.PublicKey(device.PublicKey)) {
+	if !s.limiter.allow("device:"+device.Fingerprint.String(), s.now()) {
+		s.writeError(w, http.StatusTooManyRequests, codeLimit, "请求过于频繁")
 		return store.Device{}, false
 	}
 	return device, true
