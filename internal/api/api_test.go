@@ -676,6 +676,67 @@ func TestRevokeRejectsLastDevice(t *testing.T) {
 	}
 }
 
+func TestRevokeCountsOnlyActiveDevices(t *testing.T) {
+	// 吊销不移除设备，「最后一台」的判断若按设备总数来数，两台设备就能互相吊销，
+	// 结果频道里一台可用设备也不剩。
+	env := newEnv(t, nil)
+	first, second := newKey(t), newKey(t)
+	channelID := env.register(first)
+	env.register(second)
+
+	status, body, _ := env.call(second, pathRevoke, revokeRequest{ChannelID: channelID, Target: first.Fingerprint().String()})
+	expectStatus(t, status, body, http.StatusOK)
+
+	// 剩下的这台已是频道里唯一可用的设备，不能把自己也吊销掉。
+	status, body, _ = env.call(second, pathRevoke, revokeRequest{ChannelID: channelID, Target: second.Fingerprint().String()})
+	expectStatus(t, status, body, http.StatusConflict)
+	if code := errorCode(t, body); code != codeConflict {
+		t.Fatalf("错误代码为 %q，期望 %q", code, codeConflict)
+	}
+
+	status, body, _ = env.report(second, channelID, 1, []byte("状态"))
+	expectStatus(t, status, body, http.StatusOK)
+}
+
+func TestConcurrentRevokeKeepsOneActiveDevice(t *testing.T) {
+	// 两台设备若各自通过判定再写入，频道里同样会一台可用设备也不剩。
+	env := newEnv(t, nil)
+	first, second := newKey(t), newKey(t)
+	channelID := env.register(first)
+	env.register(second)
+
+	pairs := [][2]*identity.KeyPair{{first, second}, {second, first}}
+	statuses := make([]int, len(pairs))
+	var wg sync.WaitGroup
+	for index, pair := range pairs {
+		wg.Add(1)
+		go func(index int, by, target *identity.KeyPair) {
+			defer wg.Done()
+			status, _, _ := env.call(by, pathRevoke, revokeRequest{ChannelID: channelID, Target: target.Fingerprint().String()})
+			statuses[index] = status
+		}(index, pair[0], pair[1])
+	}
+	wg.Wait()
+
+	succeeded := 0
+	for _, status := range statuses {
+		if status == http.StatusOK {
+			succeeded += 1
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("并发吊销成功 %d 次，期望一次：%v", succeeded, statuses)
+	}
+
+	active, err := env.server.activeDevices(store.ChannelID(channelID))
+	if err != nil {
+		t.Fatalf("读取可用设备失败：%v", err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("并发吊销之后可用设备为 %d 台，期望一台", len(active))
+	}
+}
+
 func TestRevokeRejectsUnknownTarget(t *testing.T) {
 	env := newEnv(t, nil)
 	key := newKey(t)

@@ -193,8 +193,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 // 检查与写入之间若能被别的请求插进来，并发注册就能突破设备数上限，也会为同一个
 // 别名建出多个频道——那会让同一仓库的两台设备互相看不到对方的记录。
 func (s *Server) registerDevice(cfg *config.Config, alias string, request signedRequest, publicKey ed25519.PublicKey) (store.Channel, error) {
-	s.registerMu.Lock()
-	defer s.registerMu.Unlock()
+	s.channelMu.Lock()
+	defer s.channelMu.Unlock()
 
 	channel, err := s.channelByName(alias)
 	if err != nil {
@@ -459,30 +459,74 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, codeBadRequest, "被吊销设备的指纹不合规")
 		return
 	}
-	if _, err := s.store.Device(channel, target); err != nil {
+
+	err = s.revokeDevice(channel, device.Fingerprint, target)
+	switch {
+	case errors.Is(err, store.ErrDeviceNotFound):
 		s.writeError(w, http.StatusNotFound, codeNotFound, "该设备不在频道内")
 		return
-	}
-
-	count, err := s.store.CountDevices(channel)
-	if err != nil {
-		s.internal(w, err)
+	case errors.Is(err, errLastDevice):
+		// 防自锁：吊销之后频道里会一台可用设备也不剩，谁也进不来了。
+		s.writeError(w, http.StatusConflict, codeConflict, "不允许吊销频道内最后一台可用设备")
 		return
-	}
-	if count <= 1 {
-		// 防自锁：频道里只剩一台设备时不许吊销，否则谁也进不来了。
-		s.writeError(w, http.StatusConflict, codeConflict, "不允许吊销频道内最后一台已注册设备")
-		return
-	}
-
-	revocation := store.Revocation{Fingerprint: target, By: device.Fingerprint, At: s.now().UTC()}
-	if err := s.store.Revoke(channel, revocation); err != nil {
+	case err != nil:
 		s.internal(w, err)
 		return
 	}
 
 	s.logger.Info("设备已被吊销", "频道", channel, "设备", target.String(), "发起者", device.Fingerprint.String())
 	s.writeJSON(w, http.StatusOK, revokeResponse{Revoked: target.String()})
+}
+
+// revokeDevice 在临界区里完成一次吊销：核对目标在频道内、防自锁、写入名单。
+//
+// 三件事必须一起完成。吊销不移除设备，被吊销的设备留在列表里却已是废票，因此
+// 「会不会把频道吊销空」只能按未被吊销的设备数判断；判定与写入之间若能插进别的
+// 请求，两台设备就会各自通过判定，结果仍是频道里一台可用设备也不剩。
+func (s *Server) revokeDevice(channel store.ChannelID, by, target identity.Fingerprint) error {
+	s.channelMu.Lock()
+	defer s.channelMu.Unlock()
+
+	if _, err := s.store.Device(channel, target); err != nil {
+		return err
+	}
+
+	active, err := s.activeDevices(channel)
+	if err != nil {
+		return err
+	}
+	// 目标已被吊销时不再判定：重复吊销不改变既有条目，也就不会把频道吊销空。
+	if active[target] && len(active) <= 1 {
+		return errLastDevice
+	}
+
+	return s.store.Revoke(channel, store.Revocation{Fingerprint: target, By: by, At: s.now().UTC()})
+}
+
+// activeDevices 列出频道内尚未被吊销的设备。吊销不移除设备，因此设备列表里
+// 既有可用设备，也有只剩名分的废票，两者必须分开数。
+func (s *Server) activeDevices(channel store.ChannelID) (map[identity.Fingerprint]bool, error) {
+	devices, err := s.store.Devices(channel)
+	if err != nil {
+		return nil, err
+	}
+	revocations, err := s.store.Revocations(channel)
+	if err != nil {
+		return nil, err
+	}
+
+	revoked := make(map[identity.Fingerprint]bool, len(revocations))
+	for _, item := range revocations {
+		revoked[item.Fingerprint] = true
+	}
+
+	active := make(map[identity.Fingerprint]bool, len(devices))
+	for _, item := range devices {
+		if !revoked[item.Fingerprint] {
+			active[item.Fingerprint] = true
+		}
+	}
+	return active, nil
 }
 
 // handleRetire 处理设备退役：删除自己的记录、移出设备列表并记入吊销，一步不可回退。
