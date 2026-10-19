@@ -1,0 +1,46 @@
+name: 检查
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 取出源码
+        uses: actions/checkout@v4
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 格式检查
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未通过 gofmt 检查："
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: 静态检查
+        run: go vet ./...
+      - name: 交叉编译
+        run: |
+          for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build ./...
+          done
+      - name: 测试与覆盖率
+        run: |
+          go test -race -covermode=atomic -coverprofile=cover.out ./...
+          coverage="$(go tool cover -func=cover.out | awk '/^total:/ { print $3 }' | tr -d '%')"
+          echo "语句覆盖率：${coverage}%"
+          awk -v c="$coverage" 'BEGIN { if (c + 0 < 90) { print "覆盖率低于门禁 90%"; exit 1 } }'

@@ -1,0 +1,120 @@
+# 发布：标签推送时产出四个平台的二进制，汇总校验后挂到 Release 上。
+#
+# 版本以标签为准，构建期注入版本、提交与时间，使 `version` 子命令的输出与实际产物
+# 对得上。带连字符的标签（如 v0.2.0-rc.1）自动标记为预发布。
+name: 发布
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已存在的标签
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: windows
+            arch: amd64
+          - os: windows
+            arch: arm64
+    steps:
+      - name: 取出源码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: 构建
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [ -n "${{ inputs.tag }}" ]; then tag="${{ inputs.tag }}"; fi
+          version="${tag#v}"
+          ext=""
+          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags "-s -w \
+              -X github.com/y1chu666/wip-relay/internal/buildinfo.Version=${version} \
+              -X github.com/y1chu666/wip-relay/internal/buildinfo.Commit=${GITHUB_SHA:0:7} \
+              -X github.com/y1chu666/wip-relay/internal/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o "dist/wip-relay_${version}_${GOOS}_${GOARCH}${ext}" ./cmd/wip-relay
+      - name: 上传中间产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: wip-relay-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 取出源码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: 取回中间产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 计算校验值
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          ls -l
+      - name: 确定版本
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [ -n "${{ inputs.tag }}" ]; then tag="${{ inputs.tag }}"; fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
+          if [[ "$tag" == *-* ]]; then echo "PRERELEASE=--prerelease" >> "$GITHUB_ENV"; else echo "PRERELEASE=" >> "$GITHUB_ENV"; fi
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "WIP Relay ${VERSION}。自托管中继，只转达未提交状态，不上传文件内容。可与 [Vault WIP](https://github.com/y1chu666/vault-wip) 插件搭配，也可按[协议](https://github.com/y1chu666/wip-relay/blob/main/docs/protocol.md)接入其他客户端。" \
+            $PRERELEASE
+      - name: 上传资产
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$TAG" dist/* --clobber
+      - name: 回拉校验
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p verify
+          gh release download "$TAG" --dir verify
+          cd verify
+          sha256sum -c SHA256SUMS.txt
