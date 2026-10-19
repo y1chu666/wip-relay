@@ -86,13 +86,16 @@ type reportResponse struct {
 
 // 上报响应的容量约束。
 //
-// 不设约束时，响应大小随频道内设备数与单条记录大小线性增长，最坏可到数 GB：
-// 收件方每次上报都要整份组装一次。上限取在插件 8 MiB 响应上限之下，
-// 使频道再大也不至于把对端直接挤下线。
+// 不设约束时，响应大小随频道内设备数、单条记录大小与吊销名单长度线性增长，
+// 最坏可到数 GB：收件方每次上报都要整份组装一次。上限取在插件 8 MiB 响应上限
+// 之下，使频道再大也不至于把对端直接挤下线。
 const (
 	maxReportBytes      = 7 << 20
 	recordOverheadBytes = 256
 	revocationRowBytes  = 256
+	// revocationsShare 是吊销名单在回送里最多占用的字节数。吊销条目同样只增不减，
+	// 若与记录共用整份预算，一份堆长的名单就能把各端状态挤得一条也回不去。
+	revocationsShare = maxReportBytes / 4
 )
 
 // maxSequence 是允许上报的序号上界。
@@ -347,6 +350,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		Records:     make([]recordDTO, 0, len(records)),
 		Revocations: make([]revocationDTO, 0, len(revocations)),
 	}
+	revocations, response.Truncated = trimRevocations(revocations, revocationsInReply(cfg))
 	for _, item := range revocations {
 		response.Revocations = append(response.Revocations, revocationDTO{
 			Fingerprint: item.Fingerprint.String(),
@@ -387,7 +391,9 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		}
 		size := estimateRecordBytes(len(item.Payload), len(item.Signature))
 		// 第一条一律回送：只带回一条也胜过一条都不带，否则对端永远停在旧状态上。
-		if len(response.Records) > 0 && size > budget {
+		// 例外是本设备被拒的这一轮：既有记录必须回去，它是本设备继续上报的唯一线索，
+		// 而其余记录下一轮还有机会——设备推进序号之后就不再是被拒了。
+		if size > budget && (len(response.Records) > 0 || response.Own != nil) {
 			response.Truncated = true
 			break
 		}
@@ -402,6 +408,26 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 // 其余字段按常量计。宁可略高估，也不要让响应越过客户端的上限。
 func estimateRecordBytes(payload, signature int) int {
 	return base64Len(payload) + base64Len(signature) + recordOverheadBytes
+}
+
+// revocationsInReply 是回送里吊销条数的上限：既不超过频道自己的上限，也不越过
+// 吊销名单在回送预算里分到的那一份。
+func revocationsInReply(cfg *config.Config) int {
+	return min(cfg.Limits.RevocationsPerChannel, revocationsShare/revocationRowBytes)
+}
+
+// trimRevocations 把吊销名单截到给定条数，并报告是否截断。
+//
+// 截断时按时间从新到旧取舍：刚发生的吊销最需要尽快送到对端，早先的条目客户端多半
+// 已经收下，放到下一轮再取不会漏掉。名单本身按指纹排序，直接截尾会每次都漏掉同一批。
+func trimRevocations(revocations []store.Revocation, limit int) ([]store.Revocation, bool) {
+	if len(revocations) <= limit {
+		return revocations, false
+	}
+
+	kept := append([]store.Revocation(nil), revocations...)
+	sort.SliceStable(kept, func(i, j int) bool { return kept[i].At.After(kept[j].At) })
+	return kept[:limit], true
 }
 
 // base64Len 是 n 字节按标准 base64 编码后的长度。
@@ -460,7 +486,7 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.revokeDevice(channel, device.Fingerprint, target)
+	err = s.revokeDevice(cfg, channel, device.Fingerprint, target)
 	switch {
 	case errors.Is(err, store.ErrDeviceNotFound):
 		s.writeError(w, http.StatusNotFound, codeNotFound, "该设备不在频道内")
@@ -468,6 +494,9 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errLastDevice):
 		// 防自锁：吊销之后频道里会一台可用设备也不剩，谁也进不来了。
 		s.writeError(w, http.StatusConflict, codeConflict, "不允许吊销频道内最后一台可用设备")
+		return
+	case errors.Is(err, errRevocationsFull):
+		s.writeError(w, http.StatusConflict, codeLimit, revocationsFullMessage)
 		return
 	case err != nil:
 		s.internal(w, err)
@@ -478,12 +507,13 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, revokeResponse{Revoked: target.String()})
 }
 
-// revokeDevice 在临界区里完成一次吊销：核对目标在频道内、防自锁、写入名单。
+// revokeDevice 在临界区里完成一次吊销：核对目标在频道内、防自锁、核对名单上限、
+// 写入名单。
 //
-// 三件事必须一起完成。吊销不移除设备，被吊销的设备留在列表里却已是废票，因此
+// 这些事必须一起完成。吊销不移除设备，被吊销的设备留在列表里却已是废票，因此
 // 「会不会把频道吊销空」只能按未被吊销的设备数判断；判定与写入之间若能插进别的
 // 请求，两台设备就会各自通过判定，结果仍是频道里一台可用设备也不剩。
-func (s *Server) revokeDevice(channel store.ChannelID, by, target identity.Fingerprint) error {
+func (s *Server) revokeDevice(cfg *config.Config, channel store.ChannelID, by, target identity.Fingerprint) error {
 	s.channelMu.Lock()
 	defer s.channelMu.Unlock()
 
@@ -491,28 +521,35 @@ func (s *Server) revokeDevice(channel store.ChannelID, by, target identity.Finge
 		return err
 	}
 
-	active, err := s.activeDevices(channel)
+	active, revoked, err := s.channelMembers(channel)
 	if err != nil {
 		return err
 	}
-	// 目标已被吊销时不再判定：重复吊销不改变既有条目，也就不会把频道吊销空。
-	if active[target] && len(active) <= 1 {
-		return errLastDevice
+	if active[target] {
+		// 目标已被吊销时两项判定都不适用：重复吊销不改变既有条目，也就不会
+		// 把频道吊销空，也不必占新的条数。
+		if revoked >= cfg.Limits.RevocationsPerChannel {
+			return errRevocationsFull
+		}
+		if len(active) <= 1 {
+			return errLastDevice
+		}
 	}
 
 	return s.store.Revoke(channel, store.Revocation{Fingerprint: target, By: by, At: s.now().UTC()})
 }
 
-// activeDevices 列出频道内尚未被吊销的设备。吊销不移除设备，因此设备列表里
-// 既有可用设备，也有只剩名分的废票，两者必须分开数。
-func (s *Server) activeDevices(channel store.ChannelID) (map[identity.Fingerprint]bool, error) {
+// channelMembers 返回频道内尚未被吊销的设备，以及吊销名单的条数。
+//
+// 吊销不移除设备，设备列表里既有可用设备，也有只剩名分的废票，两者必须分开数。
+func (s *Server) channelMembers(channel store.ChannelID) (map[identity.Fingerprint]bool, int, error) {
 	devices, err := s.store.Devices(channel)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	revocations, err := s.store.Revocations(channel)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	revoked := make(map[identity.Fingerprint]bool, len(revocations))
@@ -526,7 +563,7 @@ func (s *Server) activeDevices(channel store.ChannelID) (map[identity.Fingerprin
 			active[item.Fingerprint] = true
 		}
 	}
-	return active, nil
+	return active, len(revocations), nil
 }
 
 // handleRetire 处理设备退役：删除自己的记录、移出设备列表并记入吊销，一步不可回退。
@@ -561,22 +598,45 @@ func (s *Server) handleRetire(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.DeleteRecord(channel, device.Fingerprint); err != nil && !errors.Is(err, store.ErrRecordNotFound) {
-		s.internal(w, err)
+	err := s.retireDevice(cfg, channel, device.Fingerprint)
+	switch {
+	case errors.Is(err, errRevocationsFull):
+		s.writeError(w, http.StatusConflict, codeLimit, revocationsFullMessage)
 		return
-	}
-	if err := s.store.RemoveDevice(channel, device.Fingerprint); err != nil {
-		s.internal(w, err)
-		return
-	}
-	revocation := store.Revocation{Fingerprint: device.Fingerprint, By: device.Fingerprint, At: s.now().UTC()}
-	if err := s.store.Revoke(channel, revocation); err != nil {
+	case err != nil:
 		s.internal(w, err)
 		return
 	}
 
 	s.logger.Info("设备已退役", "频道", channel, "设备", device.Fingerprint.String())
 	s.writeJSON(w, http.StatusOK, retireResponse{Retired: device.Fingerprint.String()})
+}
+
+// retireDevice 在临界区里完成退役：核对名单上限、删除记录、移出设备列表、
+// 记入吊销名单。
+//
+// 退役没有门槛，但它同样要占一条吊销纪录。若不与吊销共用同一份上限，反复注册
+// 再退役就能把名单堆到任意长，而同频道的对端每次上报都要取回整份名单。
+func (s *Server) retireDevice(cfg *config.Config, channel store.ChannelID, fingerprint identity.Fingerprint) error {
+	s.channelMu.Lock()
+	defer s.channelMu.Unlock()
+
+	count, err := s.store.CountRevocations(channel)
+	if err != nil {
+		return err
+	}
+	if count >= cfg.Limits.RevocationsPerChannel {
+		return errRevocationsFull
+	}
+
+	if err := s.store.DeleteRecord(channel, fingerprint); err != nil && !errors.Is(err, store.ErrRecordNotFound) {
+		return err
+	}
+	if err := s.store.RemoveDevice(channel, fingerprint); err != nil {
+		return err
+	}
+	revocation := store.Revocation{Fingerprint: fingerprint, By: fingerprint, At: s.now().UTC()}
+	return s.store.Revoke(channel, revocation)
 }
 
 // channelByName 找出以该名称作为别名的频道，没有则建立。

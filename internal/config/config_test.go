@@ -190,11 +190,12 @@ func TestApplyDefaultsFillsZeroValues(t *testing.T) {
 		t.Errorf("日志级别默认为 %q，期望 %q", cfg.Log.Level, defaultLogLevel)
 	}
 	if cfg.Limits != (Limits{
-		DevicesPerChannel: defaultDevicesPerChannel,
-		RecordsPerDevice:  defaultRecordsPerDevice,
-		RecordsPerRequest: defaultRecordsPerRequest,
-		RecordBytes:       defaultRecordBytes,
-		RequestsPerMinute: defaultRequestsPerMinute,
+		DevicesPerChannel:     defaultDevicesPerChannel,
+		RecordsPerDevice:      defaultRecordsPerDevice,
+		RecordsPerRequest:     defaultRecordsPerRequest,
+		RecordBytes:           defaultRecordBytes,
+		RevocationsPerChannel: defaultRevocationsPerChannel,
+		RequestsPerMinute:     defaultRequestsPerMinute,
 	}) {
 		t.Errorf("上限默认值不符：%+v", cfg.Limits)
 	}
@@ -219,10 +220,11 @@ func TestLimitsValidation(t *testing.T) {
 	cfg.Limits.DevicesPerChannel = 0
 	cfg.Limits.RecordsPerDevice = -1
 	cfg.Limits.RecordBytes = maxRecordBytes + 1
+	cfg.Limits.RevocationsPerChannel = maxRevocationsPerChannel + 1
 
 	err := cfg.Validate()
 
-	for _, want := range []string{"limits.devices_per_channel", "limits.records_per_device", "limits.record_bytes"} {
+	for _, want := range []string{"limits.devices_per_channel", "limits.records_per_device", "limits.record_bytes", "limits.revocations_per_channel"} {
 		checkErr(t, err, want)
 	}
 }

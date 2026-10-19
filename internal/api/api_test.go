@@ -56,11 +56,12 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *testEnv {
 		},
 		Transport: config.Transport{Mode: config.ModePinned, CertFile: "relay.crt", KeyFile: "relay.key"},
 		Limits: config.Limits{
-			DevicesPerChannel: 4,
-			RecordsPerDevice:  4,
-			RecordsPerRequest: 16,
-			RecordBytes:       4096,
-			RequestsPerMinute: 1000,
+			DevicesPerChannel:     4,
+			RecordsPerDevice:      4,
+			RecordsPerRequest:     16,
+			RecordBytes:           4096,
+			RevocationsPerChannel: 8,
+			RequestsPerMinute:     1000,
 		},
 		Log: config.Log{Level: "error"},
 	}
@@ -728,12 +729,157 @@ func TestConcurrentRevokeKeepsOneActiveDevice(t *testing.T) {
 		t.Fatalf("并发吊销成功 %d 次，期望一次：%v", succeeded, statuses)
 	}
 
-	active, err := env.server.activeDevices(store.ChannelID(channelID))
+	active, _, err := env.server.channelMembers(store.ChannelID(channelID))
 	if err != nil {
 		t.Fatalf("读取可用设备失败：%v", err)
 	}
 	if len(active) != 1 {
 		t.Fatalf("并发吊销之后可用设备为 %d 台，期望一台", len(active))
+	}
+}
+
+func TestRevocationListLimitStopsFurtherWrites(t *testing.T) {
+	// 吊销名单只增不减，若没有上限，反复注册再退役就能把它堆到任意长，
+	// 而同频道的对端每次上报都要取回整份名单。
+	env := newEnv(t, func(cfg *config.Config) {
+		cfg.Limits.RevocationsPerChannel = 1
+	})
+	first, second, third := newKey(t), newKey(t), newKey(t)
+	channelID := env.register(first)
+	env.register(second)
+	env.register(third)
+
+	status, body, _ := env.call(second, pathRevoke, revokeRequest{ChannelID: channelID, Target: first.Fingerprint().String()})
+	expectStatus(t, status, body, http.StatusOK)
+
+	// 名单已满：再吊销别的设备应当被拒，并说明该改哪一项配置。
+	status, body, _ = env.call(second, pathRevoke, revokeRequest{ChannelID: channelID, Target: third.Fingerprint().String()})
+	expectStatus(t, status, body, http.StatusConflict)
+	if code := errorCode(t, body); code != codeLimit {
+		t.Fatalf("错误代码为 %q，期望 %q", code, codeLimit)
+	}
+	if !strings.Contains(string(body), "revocations_per_channel") {
+		t.Fatalf("错误文案没有说明该改哪一项配置：%s", body)
+	}
+
+	// 退役同样要占一条吊销纪录，因此一并受上限约束。
+	status, body, _ = env.call(third, pathRetire, retireRequest{ChannelID: channelID})
+	expectStatus(t, status, body, http.StatusConflict)
+	if code := errorCode(t, body); code != codeLimit {
+		t.Fatalf("错误代码为 %q，期望 %q", code, codeLimit)
+	}
+	if _, err := env.store.Device(store.ChannelID(channelID), third.Fingerprint()); err != nil {
+		t.Errorf("被拒的退役动了设备列表：%v", err)
+	}
+
+	// 重复吊销同一台设备不占新的条目，因此仍然允许。
+	status, body, _ = env.call(second, pathRevoke, revokeRequest{ChannelID: channelID, Target: first.Fingerprint().String()})
+	expectStatus(t, status, body, http.StatusOK)
+}
+
+func TestReportTrimsRevocationsNewestFirst(t *testing.T) {
+	// 回送里的吊销名单同样受限。超出时按时间从新到旧取舍：名单本身按指纹排序，
+	// 直接截尾会每次都漏掉同一批，而刚发生的吊销最需要尽快送到对端。
+	env := newEnv(t, func(cfg *config.Config) {
+		cfg.Limits.RevocationsPerChannel = 2
+	})
+	key := newKey(t)
+	channelID := env.register(key)
+	channel := store.ChannelID(channelID)
+
+	newest := make([]identity.Fingerprint, 0, 4)
+	for index := 0; index < 4; index += 1 {
+		target := newKey(t).Fingerprint()
+		at := env.now.Add(-time.Duration(index) * time.Minute)
+		if err := env.store.Revoke(channel, store.Revocation{Fingerprint: target, By: key.Fingerprint(), At: at}); err != nil {
+			t.Fatalf("写入吊销纪录失败：%v", err)
+		}
+		if index < 2 {
+			newest = append(newest, target)
+		}
+	}
+
+	status, body, _ := env.report(key, channelID, 1, []byte("状态"))
+	expectStatus(t, status, body, http.StatusOK)
+
+	var response reportResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("解析响应失败：%v", err)
+	}
+	if !response.Truncated {
+		t.Fatal("吊销名单被截断却没有标注")
+	}
+	kept := make(map[string]bool, len(response.Revocations))
+	for _, item := range response.Revocations {
+		kept[item.Fingerprint] = true
+	}
+	if len(kept) != 2 || !kept[newest[0].String()] || !kept[newest[1].String()] {
+		t.Fatalf("回送的不是最新的两条吊销纪录：%+v", response.Revocations)
+	}
+}
+
+func TestTrimRevocationsKeepsWithinShare(t *testing.T) {
+	// 份额是回送里吊销名单的硬边界：名单再长也不能越过它。
+	limit := revocationsShare / revocationRowBytes
+	items := make([]store.Revocation, limit+1)
+	for index := range items {
+		items[index] = store.Revocation{At: time.Unix(int64(index), 0).UTC()}
+	}
+
+	kept, truncated := trimRevocations(items, limit)
+
+	if !truncated {
+		t.Fatal("超出份额却没有标注截断")
+	}
+	if len(kept) != limit {
+		t.Fatalf("保留了 %d 条，期望 %d 条", len(kept), limit)
+	}
+	if !kept[0].At.Equal(items[len(items)-1].At) {
+		t.Fatal("截断没有优先保留最新的条目")
+	}
+
+	whole, cut := trimRevocations(items[:limit], limit)
+	if cut || len(whole) != limit {
+		t.Fatalf("未超上限时不该截断：截断为 %v，条数为 %d", cut, len(whole))
+	}
+}
+
+func TestRejectedReportKeepsRoomForOwnRecord(t *testing.T) {
+	// 被拒时回送的既有记录是本设备继续上报的唯一线索，因此它优先于其余记录：
+	// 两者都放不下时宁可少回送记录，也不要让回应越过客户端的上限。
+	env := newEnv(t, func(cfg *config.Config) {
+		cfg.Limits.RecordBytes = 4 << 20
+		cfg.Limits.RecordsPerRequest = 16
+	})
+	first, second := newKey(t), newKey(t)
+	channelID := env.register(first)
+	env.register(second)
+
+	big := bytes.Repeat([]byte{7}, 3<<20)
+	for _, key := range []*identity.KeyPair{first, second} {
+		status, body, _ := env.report(key, channelID, 1, big)
+		expectStatus(t, status, body, http.StatusOK)
+	}
+
+	// 同一序号再报一次会被拒，回送里于是既有既有记录，也有对端那份大记录。
+	status, body, _ := env.report(second, channelID, 1, big)
+	expectStatus(t, status, body, http.StatusOK)
+
+	var response reportResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("解析响应失败：%v", err)
+	}
+	if response.Own == nil {
+		t.Fatal("被拒时没有回送本设备的既有记录")
+	}
+	if len(response.Records) != 0 {
+		t.Fatalf("两者都放不下时仍回送了 %d 条记录", len(response.Records))
+	}
+	if !response.Truncated {
+		t.Fatal("截断之后没有标注")
+	}
+	if len(body) > maxReportBytes {
+		t.Fatalf("回应为 %d 字节，越过了上限 %d", len(body), maxReportBytes)
 	}
 }
 

@@ -353,6 +353,15 @@ func (s *Store) Revocations(channel ChannelID) ([]Revocation, error) {
 	return revocations, nil
 }
 
+// CountRevocations 统计频道内的吊销条数。
+func (s *Store) CountRevocations(channel ChannelID) (int, error) {
+	revocations, err := s.Revocations(channel)
+	if err != nil {
+		return 0, err
+	}
+	return len(revocations), nil
+}
+
 // Forgive 把设备移出吊销名单，供极端情形下的恢复使用；未被吊销时返回 ErrNotRevoked。
 func (s *Store) Forgive(channel ChannelID, fingerprint identity.Fingerprint) error {
 	return s.write(func(tx *bolt.Tx) error {

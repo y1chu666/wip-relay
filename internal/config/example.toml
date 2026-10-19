@@ -30,6 +30,7 @@ devices_per_channel = 16    # 上限 1024
 records_per_device = 8      # 上限 64
 records_per_request = 512   # 上限 4096
 record_bytes = 65536        # 上限 4194304
+revocations_per_channel = 1024  # 上限 65536
 requests_per_minute = 240   # 上限 6000
 
 [log]

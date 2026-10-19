@@ -33,23 +33,25 @@ const (
 
 // 各项上限。设上限是为了让一份写错的配置不至于把服务端拖垮。
 const (
-	maxDevicesPerChannel = 1024
-	maxRecordsPerDevice  = 64
-	maxRecordsPerRequest = 4096
-	maxRecordBytes       = 4 << 20
-	maxRequestsPerMinute = 6000
+	maxDevicesPerChannel     = 1024
+	maxRecordsPerDevice      = 64
+	maxRecordsPerRequest     = 4096
+	maxRecordBytes           = 4 << 20
+	maxRevocationsPerChannel = 65536
+	maxRequestsPerMinute     = 6000
 )
 
 // 默认值：配置项留空或填零时取以下取值。
 const (
-	defaultListen            = "127.0.0.1:8787"
-	defaultDataDir           = "./data"
-	defaultDevicesPerChannel = 16
-	defaultRecordsPerDevice  = 8
-	defaultRecordsPerRequest = 512
-	defaultRecordBytes       = 64 << 10
-	defaultRequestsPerMinute = 240
-	defaultLogLevel          = "info"
+	defaultListen                = "127.0.0.1:8787"
+	defaultDataDir               = "./data"
+	defaultDevicesPerChannel     = 16
+	defaultRecordsPerDevice      = 8
+	defaultRecordsPerRequest     = 512
+	defaultRecordBytes           = 64 << 10
+	defaultRevocationsPerChannel = 1024
+	defaultRequestsPerMinute     = 240
+	defaultLogLevel              = "info"
 )
 
 //go:embed example.toml
@@ -102,7 +104,10 @@ type Limits struct {
 	RecordsPerDevice  int `toml:"records_per_device"`
 	RecordsPerRequest int `toml:"records_per_request"`
 	RecordBytes       int `toml:"record_bytes"`
-	RequestsPerMinute int `toml:"requests_per_minute"`
+	// RevocationsPerChannel 限制一个频道能留下多少条吊销纪录。吊销名单只增不减，
+	// 且每次上报都要整份回送，不设上限时它可以被堆到任意长。
+	RevocationsPerChannel int `toml:"revocations_per_channel"`
+	RequestsPerMinute     int `toml:"requests_per_minute"`
 }
 
 // Log 描述日志输出。
@@ -277,6 +282,9 @@ func (c *Config) applyDefaults() {
 	if limits.RecordBytes == 0 {
 		limits.RecordBytes = defaultRecordBytes
 	}
+	if limits.RevocationsPerChannel == 0 {
+		limits.RevocationsPerChannel = defaultRevocationsPerChannel
+	}
 	if limits.RequestsPerMinute == 0 {
 		limits.RequestsPerMinute = defaultRequestsPerMinute
 	}
@@ -325,6 +333,7 @@ func (c *Config) validateLimits() []error {
 		{"limits.records_per_device", c.Limits.RecordsPerDevice, maxRecordsPerDevice},
 		{"limits.records_per_request", c.Limits.RecordsPerRequest, maxRecordsPerRequest},
 		{"limits.record_bytes", c.Limits.RecordBytes, maxRecordBytes},
+		{"limits.revocations_per_channel", c.Limits.RevocationsPerChannel, maxRevocationsPerChannel},
 		{"limits.requests_per_minute", c.Limits.RequestsPerMinute, maxRequestsPerMinute},
 	}
 
