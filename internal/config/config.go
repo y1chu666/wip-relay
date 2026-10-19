@@ -101,6 +101,7 @@ func (t Transport) Degraded() bool {
 // Limits 是限流与容量上限。
 type Limits struct {
 	DevicesPerChannel int `toml:"devices_per_channel"`
+	// RecordsPerDevice 只参与校验取值是否合规：每台设备在中继上只有一条记录，新的覆盖旧的。
 	RecordsPerDevice  int `toml:"records_per_device"`
 	RecordsPerRequest int `toml:"records_per_request"`
 	RecordBytes       int `toml:"record_bytes"`
