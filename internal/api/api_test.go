@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1146,6 +1147,55 @@ func TestRateLimitIgnoresUnverifiedDeviceRequests(t *testing.T) {
 	status, body, _ := env.report(key, channelID, 1, []byte("状态"))
 	if status != http.StatusOK {
 		t.Fatalf("设备本人的上报被限流：状态 %d，正文 %s", status, body)
+	}
+}
+
+func TestConcurrentRegisterKeepsOneChannelWithinLimit(t *testing.T) {
+	// 检查与写入之间若可交错，并发注册会突破设备数上限，也会为同一别名建出多个频道，
+	// 使同一仓库的两台设备互相看不到对方的记录。
+	env := newEnv(t, func(cfg *config.Config) {
+		cfg.Limits.DevicesPerChannel = 3
+		cfg.Limits.RequestsPerMinute = 1000
+	})
+
+	const attempts = 8
+	keys := make([]*identity.KeyPair, attempts)
+	for i := range keys {
+		keys[i] = newKey(t)
+	}
+
+	statuses := make([]int, attempts)
+	var wg sync.WaitGroup
+	for i := range keys {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			status, _, _ := env.call(keys[index], pathRegister, registerRequest{
+				Channel:    testChannel,
+				Credential: testCredential,
+				PublicKey:  base64.StdEncoding.EncodeToString(keys[index].Public()),
+			})
+			statuses[index] = status
+		}(i)
+	}
+	wg.Wait()
+
+	channels, err := env.store.Channels()
+	if err != nil {
+		t.Fatalf("列出频道失败：%v", err)
+	}
+	if len(channels) != 1 {
+		t.Fatalf("同一别名下有 %d 个频道", len(channels))
+	}
+	devices, err := env.store.Devices(channels[0].ID)
+	if err != nil {
+		t.Fatalf("列出设备失败：%v", err)
+	}
+	if len(devices) > 3 {
+		t.Fatalf("设备数为 %d，超过上限 3", len(devices))
+	}
+	if len(devices) != 3 {
+		t.Fatalf("设备数为 %d，期望正好达到上限 3", len(devices))
 	}
 }
 

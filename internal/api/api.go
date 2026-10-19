@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,6 +53,12 @@ const (
 	codeInternal     = "internal"
 )
 
+// 注册路径上的两种可预期失败：设备已被吊销、频道已满。
+var (
+	errDeviceRevoked = errors.New("设备已被吊销")
+	errChannelFull   = errors.New("频道内设备数已达上限")
+)
+
 // channelIDBytes 是频道标识的随机字节数。
 const channelIDBytes = 16
 
@@ -65,6 +72,11 @@ type Server struct {
 	replay  *envelope.ReplayGuard
 	limiter *limiter
 	logger  *slog.Logger
+
+	// registerMu 串行化注册：解析或建立频道、数设备与写设备必须一起完成，
+	// 否则并发注册既能突破设备数上限，也能为同一个别名建出多个频道。
+	// 存储以独占方式打开，服务端因此只能是单进程，进程内串行即可。
+	registerMu sync.Mutex
 
 	// now 与 newID 允许在测试中固定取值。
 	now   func() time.Time

@@ -150,37 +150,56 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	channel, err := s.channelByName(payload.Channel)
-	if err != nil {
+	channel, err := s.registerDevice(cfg, payload.Channel, request, publicKey)
+	switch {
+	case errors.Is(err, errDeviceRevoked):
+		s.writeError(w, http.StatusUnauthorized, codeUnauthorized, "该设备已被吊销，不能再次注册")
+		return
+	case errors.Is(err, errChannelFull):
+		s.writeError(w, http.StatusConflict, codeLimit, "频道内设备数已达上限")
+		return
+	case err != nil:
 		s.internal(w, err)
 		return
 	}
 
+	s.logger.Info("设备已注册", "频道", channel.ID, "设备", request.Fingerprint.String())
+	s.writeJSON(w, http.StatusOK, channelResponse{ChannelID: string(channel.ID), ChannelAlias: channel.Alias})
+}
+
+// registerDevice 在临界区里完成注册：解析或建立频道、检查吊销与重复注册、
+// 数设备、写入设备。
+//
+// 检查与写入之间若能被别的请求插进来，并发注册就能突破设备数上限，也会为同一个
+// 别名建出多个频道——那会让同一仓库的两台设备互相看不到对方的记录。
+func (s *Server) registerDevice(cfg *config.Config, alias string, request signedRequest, publicKey ed25519.PublicKey) (store.Channel, error) {
+	s.registerMu.Lock()
+	defer s.registerMu.Unlock()
+
+	channel, err := s.channelByName(alias)
+	if err != nil {
+		return store.Channel{}, err
+	}
+
 	if _, err := s.store.Revocation(channel.ID, request.Fingerprint); err == nil {
-		s.writeError(w, http.StatusUnauthorized, codeUnauthorized, "该设备已被吊销，不能再次注册")
-		return
+		return store.Channel{}, errDeviceRevoked
 	} else if !errors.Is(err, store.ErrNotRevoked) {
-		s.internal(w, err)
-		return
+		return store.Channel{}, err
 	}
 
 	if _, err := s.store.Device(channel.ID, request.Fingerprint); err == nil {
 		// 重复注册视为幂等：设备已经在频道里，直接回以频道信息。
-		s.writeJSON(w, http.StatusOK, channelResponse{ChannelID: string(channel.ID), ChannelAlias: channel.Alias})
-		return
+		return channel, nil
 	} else if !errors.Is(err, store.ErrDeviceNotFound) {
-		s.internal(w, err)
-		return
+		return store.Channel{}, err
 	}
 
 	count, err := s.store.CountDevices(channel.ID)
 	if err != nil {
-		s.internal(w, err)
-		return
+		return store.Channel{}, err
 	}
 	if count >= cfg.Limits.DevicesPerChannel {
-		s.writeError(w, http.StatusConflict, codeLimit, "频道内设备数已达上限")
-		return
+		return store.Channel{}, errChannelFull
 	}
 
 	device := store.Device{
@@ -189,12 +208,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		RegisteredAt: s.now().UTC(),
 	}
 	if err := s.store.AddDevice(channel.ID, device); err != nil {
-		s.internal(w, err)
-		return
+		return store.Channel{}, err
 	}
-
-	s.logger.Info("设备已注册", "频道", channel.ID, "设备", request.Fingerprint.String())
-	s.writeJSON(w, http.StatusOK, channelResponse{ChannelID: string(channel.ID), ChannelAlias: channel.Alias})
+	return channel, nil
 }
 
 // handleReport 处理状态上报，并把频道内其他设备的状态一并回送。
