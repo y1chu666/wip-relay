@@ -95,9 +95,12 @@ const (
 	revocationRowBytes  = 256
 )
 
+// maxSequence 是允许上报的序号上界。
 //
 // 客户端的序号用 JavaScript 数值表示，超过 2^53-1 就无法精确表示；若任由某台设备
 // 写进这样的序号，中继会把无从解析的记录回送给同频道所有设备，使它们每次同步都失败。
+const maxSequence = 1<<53 - 1
+
 // revokeRequest 是吊销请求。
 type revokeRequest struct {
 	ChannelID string `json:"channel_id"`
@@ -266,6 +269,12 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	if payload.Sequence < 0 {
 		s.writeError(w, http.StatusBadRequest, codeBadRequest, "序号不得为负数")
+		return
+	}
+	if payload.Sequence > maxSequence {
+		// 文案里的上界必须与 maxSequence 一致：用例会拿两者比对，改一处而忘了另一处即失败。
+		s.writeError(w, http.StatusBadRequest, codeBadRequest,
+			"序号超出可表示范围（上界 9007199254740991）：请在客户端核对本机计数后重置")
 		return
 	}
 

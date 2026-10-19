@@ -1199,6 +1199,30 @@ func TestConcurrentRegisterKeepsOneChannelWithinLimit(t *testing.T) {
 	}
 }
 
+func TestReportRejectsSequenceBeyondSafeInteger(t *testing.T) {
+	// 客户端用 JavaScript 数值表示序号，超过 2^53-1 就无法精确表示。若中继收下并回送，
+	// 同频道设备的每次同步都会因为解析不了这条记录而失败。
+	env := newEnv(t, nil)
+	key := newKey(t)
+	channelID := env.register(key)
+
+	status, body, _ := env.report(key, channelID, 1<<53, []byte("状态"))
+	expectStatus(t, status, body, http.StatusBadRequest)
+	if code := errorCode(t, body); code != codeBadRequest {
+		t.Fatalf("错误代码为 %q，期望 %q", code, codeBadRequest)
+	}
+	if !strings.Contains(string(body), "重置") {
+		t.Fatalf("错误文案没有说明如何自救：%s", body)
+	}
+	// 文案里的上界与代码里的常量必须一致。
+	if !strings.Contains(string(body), strconv.FormatInt(maxSequence, 10)) {
+		t.Fatalf("错误文案里的上界与常量不一致：%s", body)
+	}
+
+	status, body, _ = env.report(key, channelID, 1<<53-1, []byte("状态"))
+	expectStatus(t, status, body, http.StatusOK)
+}
+
 func TestReportResponseHonoursRecordsPerRequest(t *testing.T) {
 	env := newEnv(t, func(cfg *config.Config) {
 		cfg.Limits.DevicesPerChannel = 8
