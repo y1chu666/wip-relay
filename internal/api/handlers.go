@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"sort"
 	"time"
 
 	"vaultwaystation/internal/config"
@@ -79,8 +80,24 @@ type reportResponse struct {
 	Own         *recordDTO      `json:"own,omitempty"`
 	Records     []recordDTO     `json:"records"`
 	Revocations []revocationDTO `json:"revocations"`
+	// Truncated 表示回送的记录因大小或条数上限被截断：对端据此知道自己的视图不完整。
+	Truncated bool `json:"truncated,omitempty"`
 }
 
+// 上报响应的容量约束。
+//
+// 不设约束时，响应大小随频道内设备数与单条记录大小线性增长，最坏可到数 GB：
+// 收件方每次上报都要整份组装一次。上限取在插件 8 MiB 响应上限之下，
+// 使频道再大也不至于把对端直接挤下线。
+const (
+	maxReportBytes      = 7 << 20
+	recordOverheadBytes = 256
+	revocationRowBytes  = 256
+)
+
+//
+// 客户端的序号用 JavaScript 数值表示，超过 2^53-1 就无法精确表示；若任由某台设备
+// 写进这样的序号，中继会把无从解析的记录回送给同频道所有设备，使它们每次同步都失败。
 // revokeRequest 是吊销请求。
 type revokeRequest struct {
 	ChannelID string `json:"channel_id"`
@@ -321,23 +338,6 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		Records:     make([]recordDTO, 0, len(records)),
 		Revocations: make([]revocationDTO, 0, len(revocations)),
 	}
-	for _, item := range records {
-		// 不回送调用者自己的记录：它比谁都清楚自己刚才上报了什么。
-		// 唯一的例外是上报被拒：此时它并不知道中继上的序号是多少。
-		if item.Fingerprint == device.Fingerprint {
-			continue
-		}
-		response.Records = append(response.Records, toRecordDTO(item, publicKeys[item.Fingerprint]))
-	}
-	if !accepted {
-		existing, err := s.store.Record(channel, device.Fingerprint)
-		if err != nil {
-			s.internal(w, err)
-			return
-		}
-		own := toRecordDTO(existing, publicKeys[device.Fingerprint])
-		response.Own = &own
-	}
 	for _, item := range revocations {
 		response.Revocations = append(response.Revocations, revocationDTO{
 			Fingerprint: item.Fingerprint.String(),
@@ -346,7 +346,58 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	budget := maxReportBytes - len(response.Revocations)*revocationRowBytes
+	if !accepted {
+		existing, err := s.store.Record(channel, device.Fingerprint)
+		if err != nil {
+			s.internal(w, err)
+			return
+		}
+		own := toRecordDTO(existing, publicKeys[device.Fingerprint])
+		response.Own = &own
+		budget -= estimateRecordBytes(len(existing.Payload), len(existing.Signature))
+	}
+
+	others := make([]store.Record, 0, len(records))
+	for _, item := range records {
+		// 不回送调用者自己的记录：它比谁都清楚自己刚才上报了什么。
+		if item.Fingerprint == device.Fingerprint {
+			continue
+		}
+		others = append(others, item)
+	}
+	// 从新到旧回送：预算不够时先保住最新的状态，免得某台设备长期取不到。
+	sort.SliceStable(others, func(i, j int) bool {
+		return others[i].CollectedAt.After(others[j].CollectedAt)
+	})
+
+	for _, item := range others {
+		if len(response.Records) >= cfg.Limits.RecordsPerRequest {
+			response.Truncated = true
+			break
+		}
+		size := estimateRecordBytes(len(item.Payload), len(item.Signature))
+		// 第一条一律回送：只带回一条也胜过一条都不带，否则对端永远停在旧状态上。
+		if len(response.Records) > 0 && size > budget {
+			response.Truncated = true
+			break
+		}
+		budget -= size
+		response.Records = append(response.Records, toRecordDTO(item, publicKeys[item.Fingerprint]))
+	}
+
 	s.writeJSON(w, http.StatusOK, response)
+}
+
+// estimateRecordBytes 估计一条记录在响应里占用的字节数：正文与签名按 base64 折算，
+// 其余字段按常量计。宁可略高估，也不要让响应越过客户端的上限。
+func estimateRecordBytes(payload, signature int) int {
+	return base64Len(payload) + base64Len(signature) + recordOverheadBytes
+}
+
+// base64Len 是 n 字节按标准 base64 编码后的长度。
+func base64Len(n int) int {
+	return (n + 2) / 3 * 4
 }
 
 // toRecordDTO 把库中的记录整理成回复里的形状。公钥可能缺失，此时留空，

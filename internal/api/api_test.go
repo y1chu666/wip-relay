@@ -1199,3 +1199,68 @@ func TestConcurrentRegisterKeepsOneChannelWithinLimit(t *testing.T) {
 	}
 }
 
+func TestReportResponseHonoursRecordsPerRequest(t *testing.T) {
+	env := newEnv(t, func(cfg *config.Config) {
+		cfg.Limits.DevicesPerChannel = 8
+		cfg.Limits.RecordsPerRequest = 1
+	})
+
+	keys := []*identity.KeyPair{newKey(t), newKey(t), newKey(t)}
+	var channelID string
+	for _, key := range keys {
+		channelID = env.register(key)
+	}
+	for _, key := range keys {
+		status, body, _ := env.report(key, channelID, 1, []byte("状态"))
+		expectStatus(t, status, body, http.StatusOK)
+	}
+
+	status, body, _ := env.report(keys[2], channelID, 2, []byte("状态"))
+	expectStatus(t, status, body, http.StatusOK)
+
+	var response reportResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("解析响应失败：%v", err)
+	}
+	if len(response.Records) != 1 {
+		t.Fatalf("回送了 %d 条记录，期望受条数上限截断为 1 条", len(response.Records))
+	}
+	if !response.Truncated {
+		t.Fatal("截断之后没有标注")
+	}
+}
+
+func TestReportResponseHonoursByteBudget(t *testing.T) {
+	// 响应大小原本随频道内设备数与记录大小线性增长，收件方每次上报都要整份组装一次。
+	env := newEnv(t, func(cfg *config.Config) {
+		cfg.Limits.DevicesPerChannel = 8
+		cfg.Limits.RecordBytes = 4 << 20
+		cfg.Limits.RecordsPerRequest = 16
+	})
+
+	keys := []*identity.KeyPair{newKey(t), newKey(t), newKey(t)}
+	var channelID string
+	for _, key := range keys {
+		channelID = env.register(key)
+	}
+
+	big := bytes.Repeat([]byte{7}, 3<<20)
+	for _, key := range keys[:2] {
+		status, body, _ := env.report(key, channelID, 1, big)
+		expectStatus(t, status, body, http.StatusOK)
+	}
+
+	status, body, _ := env.report(keys[2], channelID, 1, []byte("小"))
+	expectStatus(t, status, body, http.StatusOK)
+
+	var response reportResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("解析响应失败：%v", err)
+	}
+	if len(response.Records) != 1 {
+		t.Fatalf("回送了 %d 条大记录，期望只回送放得下的一条", len(response.Records))
+	}
+	if !response.Truncated {
+		t.Fatal("按字节预算截断之后没有标注")
+	}
+}
