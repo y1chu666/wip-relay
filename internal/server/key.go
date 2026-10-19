@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"vaultwaystation/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/identity"
 )
 
 // keyFileMode 是密钥文件的权限：内容即明文私钥，只许属主读写。

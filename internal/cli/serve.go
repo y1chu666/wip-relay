@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"vaultwaystation/internal/config"
-	"vaultwaystation/internal/server"
+	"github.com/y1chu666/wip-relay/internal/config"
+	"github.com/y1chu666/wip-relay/internal/server"
 )
 
 // runServe 启动中继服务，直到收到中断或终止信号。

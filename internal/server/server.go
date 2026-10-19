@@ -14,9 +14,9 @@ import (
 	"os"
 	"time"
 
-	"vaultwaystation/internal/api"
-	"vaultwaystation/internal/config"
-	"vaultwaystation/internal/store"
+	"github.com/y1chu666/wip-relay/internal/api"
+	"github.com/y1chu666/wip-relay/internal/config"
+	"github.com/y1chu666/wip-relay/internal/store"
 )
 
 // reloadInterval 是检查重载请求的间隔。

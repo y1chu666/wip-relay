@@ -1,4 +1,4 @@
-module vaultwaystation
+module github.com/y1chu666/wip-relay
 
 go 1.27
 

@@ -1,4 +1,4 @@
-// Package cli 实现 waystation 命令行的参数分发。
+// Package cli 实现 wip-relay 命令行的参数分发。
 //
 // 本包只负责识别子命令、装配下层并输出结果，业务规则不写在这里，
 // 使各子命令能够脱离命令行单独测试。
@@ -13,9 +13,9 @@ import (
 	"io"
 	"os"
 
-	"vaultwaystation/internal/buildinfo"
-	"vaultwaystation/internal/config"
-	"vaultwaystation/internal/store"
+	"github.com/y1chu666/wip-relay/internal/buildinfo"
+	"github.com/y1chu666/wip-relay/internal/config"
+	"github.com/y1chu666/wip-relay/internal/store"
 )
 
 // 退出码沿用惯例：0 表示成功，1 表示执行失败，2 表示用法错误。
@@ -26,9 +26,9 @@ const (
 )
 
 // defaultConfigPath 是各子命令 --config 的默认取值。
-const defaultConfigPath = "waystation.toml"
+const defaultConfigPath = "wip-relay.toml"
 
-const usage = `用法：waystation <子命令> [选项]
+const usage = `用法：wip-relay <子命令> [选项]
 
 子命令：
   serve     启动中继服务
@@ -39,7 +39,7 @@ const usage = `用法：waystation <子命令> [选项]
   version   输出版本信息
   help      输出本说明
 
-各子命令都接受 --config 指定配置文件，默认取当前目录下的 waystation.toml。
+各子命令都接受 --config 指定配置文件，默认取当前目录下的 wip-relay.toml。
 list 与 recover 直接打开存储文件，因此需要先停止正在运行的服务。
 `
 

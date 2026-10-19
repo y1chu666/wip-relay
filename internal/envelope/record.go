@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"vaultwaystation/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/identity"
 )
 
-const recordContext = "waystation-record-v1"
+const recordContext = "wip-relay-record-v1"
 
 // Record 是状态记录中参与签名的要素。
 //

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"vaultwaystation/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/identity"
 )
 
 // ClockSkew 是允许的时钟偏差，超出即拒绝，以免陈旧请求被重放。
@@ -25,8 +25,8 @@ const ClockSkew = 60 * time.Second
 const NonceBytes = 32
 
 const (
-	requestContext  = "waystation-request-v1"
-	responseContext = "waystation-response-v1"
+	requestContext  = "wip-relay-request-v1"
+	responseContext = "wip-relay-response-v1"
 )
 
 var (

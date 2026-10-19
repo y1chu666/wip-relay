@@ -8,10 +8,10 @@ import (
 	"sort"
 	"time"
 
-	"vaultwaystation/internal/config"
-	"vaultwaystation/internal/envelope"
-	"vaultwaystation/internal/identity"
-	"vaultwaystation/internal/store"
+	"github.com/y1chu666/wip-relay/internal/config"
+	"github.com/y1chu666/wip-relay/internal/envelope"
+	"github.com/y1chu666/wip-relay/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/store"
 )
 
 // errorPayload 是错误正文。

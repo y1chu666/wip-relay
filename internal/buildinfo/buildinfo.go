@@ -16,5 +16,5 @@ var (
 
 // String 返回一行版本描述，供命令行输出。
 func String() string {
-	return fmt.Sprintf("waystation %s (commit %s, built %s)", Version, Commit, Date)
+	return fmt.Sprintf("wip-relay %s (commit %s, built %s)", Version, Commit, Date)
 }

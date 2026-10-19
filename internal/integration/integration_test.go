@@ -29,10 +29,10 @@ import (
 	"testing"
 	"time"
 
-	"vaultwaystation/internal/config"
-	"vaultwaystation/internal/envelope"
-	"vaultwaystation/internal/identity"
-	"vaultwaystation/internal/server"
+	"github.com/y1chu666/wip-relay/internal/config"
+	"github.com/y1chu666/wip-relay/internal/envelope"
+	"github.com/y1chu666/wip-relay/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/server"
 )
 
 const (
@@ -61,7 +61,7 @@ func start(t *testing.T) *harness {
 	writeFile(t, keyFile, material.keyPEM)
 
 	port := freePort(t)
-	configPath := filepath.Join(dir, "waystation.toml")
+	configPath := filepath.Join(dir, "wip-relay.toml")
 	writeFile(t, configPath, []byte(configText(dir, port)))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -152,10 +152,10 @@ func (h *harness) call(key *identity.KeyPair, path string, payload any) (int, []
 	if err != nil {
 		h.t.Fatalf("构造请求失败：%v", err)
 	}
-	request.Header.Set("X-Waystation-Fingerprint", key.Fingerprint().String())
-	request.Header.Set("X-Waystation-Timestamp", strconv.FormatInt(now.Unix(), 10))
-	request.Header.Set("X-Waystation-Nonce", nonce)
-	request.Header.Set("X-Waystation-Signature", hex.EncodeToString(signed.Signature(key)))
+	request.Header.Set("X-WIP-Relay-Fingerprint", key.Fingerprint().String())
+	request.Header.Set("X-WIP-Relay-Timestamp", strconv.FormatInt(now.Unix(), 10))
+	request.Header.Set("X-WIP-Relay-Nonce", nonce)
+	request.Header.Set("X-WIP-Relay-Signature", hex.EncodeToString(signed.Signature(key)))
 
 	response, err := h.httpClient.Do(request)
 	if err != nil {
@@ -175,7 +175,7 @@ func (h *harness) call(key *identity.KeyPair, path string, payload any) (int, []
 func (h *harness) verifyResponse(response *http.Response, body []byte) {
 	h.t.Helper()
 
-	fingerprint, err := identity.ParseFingerprint(response.Header.Get("X-Waystation-Fingerprint"))
+	fingerprint, err := identity.ParseFingerprint(response.Header.Get("X-WIP-Relay-Fingerprint"))
 	if err != nil {
 		h.t.Fatalf("响应头中的指纹不合规：%v", err)
 	}
@@ -183,7 +183,7 @@ func (h *harness) verifyResponse(response *http.Response, body []byte) {
 		h.t.Fatalf("响应来自指纹 %s 的服务端，期望 %s", fingerprint, h.serverKey.Fingerprint())
 	}
 
-	signature, err := hex.DecodeString(response.Header.Get("X-Waystation-Signature"))
+	signature, err := hex.DecodeString(response.Header.Get("X-WIP-Relay-Signature"))
 	if err != nil {
 		h.t.Fatalf("响应头中的签名编码不合规：%v", err)
 	}
@@ -463,7 +463,7 @@ func startPlaintext(t *testing.T) *harness {
 
 	dir := t.TempDir()
 	port := freePort(t)
-	configPath := filepath.Join(dir, "waystation.toml")
+	configPath := filepath.Join(dir, "wip-relay.toml")
 	writeFile(t, configPath, []byte(plaintextConfigText(dir, port)))
 
 	ctx, cancel := context.WithCancel(context.Background())

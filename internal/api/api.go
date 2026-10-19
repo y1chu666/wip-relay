@@ -22,21 +22,21 @@ import (
 	"sync/atomic"
 	"time"
 
-	"vaultwaystation/internal/config"
-	"vaultwaystation/internal/envelope"
-	"vaultwaystation/internal/identity"
-	"vaultwaystation/internal/store"
+	"github.com/y1chu666/wip-relay/internal/config"
+	"github.com/y1chu666/wip-relay/internal/envelope"
+	"github.com/y1chu666/wip-relay/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/store"
 )
 
 // 请求头名称。签名覆盖方法、路径与正文摘要，因此这些头本身不必再签。
 const (
-	headerFingerprint = "X-Waystation-Fingerprint"
-	headerTimestamp   = "X-Waystation-Timestamp"
-	headerNonce       = "X-Waystation-Nonce"
-	headerSignature   = "X-Waystation-Signature"
+	headerFingerprint = "X-WIP-Relay-Fingerprint"
+	headerTimestamp   = "X-WIP-Relay-Timestamp"
+	headerNonce       = "X-WIP-Relay-Nonce"
+	headerSignature   = "X-WIP-Relay-Signature"
 	// headerPublicKey 随每次回应给出服务端公钥，供客户端首次配对时钉住。
 	// 公钥本就不必保密，放在这里省去一个只为取公钥而设的端点。
-	headerPublicKey = "X-Waystation-Public-Key"
+	headerPublicKey = "X-WIP-Relay-Public-Key"
 )
 
 // 错误代码。客户端按代码判断，不解析文案。

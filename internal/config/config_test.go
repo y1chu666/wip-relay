@@ -276,7 +276,7 @@ func TestLogLevelValidation(t *testing.T) {
 
 func TestLoadResolvesRelativePaths(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "waystation.toml")
+	path := filepath.Join(dir, "wip-relay.toml")
 	if err := os.WriteFile(path, []byte(minimal), 0o600); err != nil {
 		t.Fatalf("写入临时配置失败：%v", err)
 	}
@@ -301,7 +301,7 @@ func TestLoadKeepsAbsolutePaths(t *testing.T) {
 	dir := t.TempDir()
 	absolute := filepath.Join(dir, "elsewhere")
 	text := strings.Replace(minimal, `"./data"`, `"`+absolute+`"`, 1)
-	path := filepath.Join(dir, "waystation.toml")
+	path := filepath.Join(dir, "wip-relay.toml")
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatalf("写入临时配置失败：%v", err)
 	}
@@ -322,7 +322,7 @@ func TestLoadRejectsMissingFile(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidContent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "waystation.toml")
+	path := filepath.Join(t.TempDir(), "wip-relay.toml")
 	if err := os.WriteFile(path, []byte("version = 2\n"), 0o600); err != nil {
 		t.Fatalf("写入临时配置失败：%v", err)
 	}

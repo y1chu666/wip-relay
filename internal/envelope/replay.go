@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"vaultwaystation/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/identity"
 )
 
 // DefaultReplayLimit 是判重表允许保留的条目数上限。

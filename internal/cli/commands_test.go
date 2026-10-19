@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"vaultwaystation/internal/config"
-	"vaultwaystation/internal/identity"
-	"vaultwaystation/internal/store"
+	"github.com/y1chu666/wip-relay/internal/config"
+	"github.com/y1chu666/wip-relay/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/store"
 )
 
 const (
@@ -38,7 +38,7 @@ key_file = "relay.key"
 [limits]
 devices_per_channel = 16
 `
-	path := filepath.Join(dir, "waystation.toml")
+	path := filepath.Join(dir, "wip-relay.toml")
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatalf("写入配置失败：%v", err)
 	}
@@ -92,7 +92,7 @@ func seed(t *testing.T, configPath string) {
 }
 
 func TestInitWritesUsableConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "waystation.toml")
+	path := filepath.Join(t.TempDir(), "wip-relay.toml")
 
 	code, stdout, stderr := run("init", "--config", path)
 
@@ -141,7 +141,7 @@ func findCredential(t *testing.T, stdout string) string {
 }
 
 func TestInitKeepsGivenCredential(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "waystation.toml")
+	path := filepath.Join(t.TempDir(), "wip-relay.toml")
 
 	code, stdout, stderr := run("init", "--config", path, "--credential", "credential-for-tests")
 
@@ -166,7 +166,7 @@ func TestInitKeepsGivenCredential(t *testing.T) {
 }
 
 func TestInitRefusesToOverwrite(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "waystation.toml")
+	path := filepath.Join(t.TempDir(), "wip-relay.toml")
 	if code, _, stderr := run("init", "--config", path); code != exitOK {
 		t.Fatalf("首次生成失败：%q", stderr)
 	}

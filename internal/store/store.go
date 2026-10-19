@@ -17,7 +17,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"vaultwaystation/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/identity"
 )
 
 // SchemaVersion 是当前的存储结构版本。

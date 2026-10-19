@@ -14,10 +14,10 @@ import (
 	"strings"
 	"testing"
 
-	"vaultwaystation/internal/api"
-	"vaultwaystation/internal/config"
-	"vaultwaystation/internal/identity"
-	"vaultwaystation/internal/store"
+	"github.com/y1chu666/wip-relay/internal/api"
+	"github.com/y1chu666/wip-relay/internal/config"
+	"github.com/y1chu666/wip-relay/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/store"
 )
 
 // writePlaintextConfig 写一份明文传输的配置：测试不需要真证书。
@@ -36,7 +36,7 @@ mode = "plaintext"
 [log]
 level = ` + strconv.Quote(level) + `
 `
-	path := filepath.Join(dir, "waystation.toml")
+	path := filepath.Join(dir, "wip-relay.toml")
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatalf("写入配置失败：%v", err)
 	}

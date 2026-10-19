@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"vaultwaystation/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/identity"
 )
 
 const (

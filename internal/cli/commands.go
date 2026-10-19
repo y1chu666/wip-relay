@@ -5,9 +5,9 @@ import (
 	"io"
 	"time"
 
-	"vaultwaystation/internal/config"
-	"vaultwaystation/internal/identity"
-	"vaultwaystation/internal/store"
+	"github.com/y1chu666/wip-relay/internal/config"
+	"github.com/y1chu666/wip-relay/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/store"
 )
 
 // runInit 生成配置样例，并写下一枚注册凭证。

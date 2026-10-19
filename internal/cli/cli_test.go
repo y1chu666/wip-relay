@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"vaultwaystation/internal/buildinfo"
+	"github.com/y1chu666/wip-relay/internal/buildinfo"
 )
 
 // run 以给定参数执行一次调用，返回退出码与两端输出。

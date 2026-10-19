@@ -9,7 +9,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"vaultwaystation/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/identity"
 )
 
 const (
@@ -23,7 +23,7 @@ const (
 func newStore(t *testing.T) *Store {
 	t.Helper()
 
-	store, err := Open(filepath.Join(t.TempDir(), "waystation.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "wip-relay.db"))
 	if err != nil {
 		t.Fatalf("打开存储失败：%v", err)
 	}
@@ -395,7 +395,7 @@ func TestForgiveRequiresRevocation(t *testing.T) {
 }
 
 func TestDataSurvivesReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "waystation.db")
+	path := filepath.Join(t.TempDir(), "wip-relay.db")
 
 	first, err := Open(path)
 	if err != nil {
@@ -430,7 +430,7 @@ func TestDataSurvivesReopen(t *testing.T) {
 // TestCorruptEntriesAreReported 检查存储被外部改动或磁盘损坏时如实报错，
 // 而不是把这些条目当作不存在而静默略过。
 func TestCorruptEntriesAreReported(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "waystation.db")
+	path := filepath.Join(t.TempDir(), "wip-relay.db")
 
 	first, err := Open(path)
 	if err != nil {
@@ -492,7 +492,7 @@ func TestCorruptEntriesAreReported(t *testing.T) {
 // TestOpenCreatesMissingDirectories 检查数据目录尚未建立时也能直接打开，
 // 否则首次部署必须先手工建目录。
 func TestOpenCreatesMissingDirectories(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "data", "nested", "waystation.db")
+	path := filepath.Join(t.TempDir(), "data", "nested", "wip-relay.db")
 
 	store, err := Open(path)
 	if err != nil {
@@ -510,7 +510,7 @@ func TestOpenCreatesMissingDirectories(t *testing.T) {
 // TestOperationsFailAfterClose 覆盖各方法在存储不可用时的报错分支，
 // 这些分支只有在存储关闭或损坏时才会走到。
 func TestOperationsFailAfterClose(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "waystation.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "wip-relay.db"))
 	if err != nil {
 		t.Fatalf("打开存储失败：%v", err)
 	}
@@ -545,7 +545,7 @@ func TestOperationsFailAfterClose(t *testing.T) {
 }
 
 func TestOpenRejectsUnknownSchemaVersion(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "waystation.db")
+	path := filepath.Join(t.TempDir(), "wip-relay.db")
 
 	db, err := bolt.Open(path, 0o600, nil)
 	if err != nil {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"vaultwaystation/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/identity"
 )
 
 func mustKey(t *testing.T) *identity.KeyPair {

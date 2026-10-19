@@ -1,10 +1,10 @@
-// waystation 是 Vault Waystation 的中继服务端。
+// wip-relay 是 WIP Relay 的中继服务端。
 package main
 
 import (
 	"os"
 
-	"vaultwaystation/internal/cli"
+	"github.com/y1chu666/wip-relay/internal/cli"
 )
 
 func main() {

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"vaultwaystation/internal/config"
-	"vaultwaystation/internal/server"
+	"github.com/y1chu666/wip-relay/internal/config"
+	"github.com/y1chu666/wip-relay/internal/server"
 )
 
 // writePlaintextConfig 写一份明文传输的配置，使用例不必准备证书。
@@ -25,7 +25,7 @@ data_dir = ` + strconv.Quote(filepath.Join(dir, "data")) + `
 [transport]
 mode = "plaintext"
 `
-	path := filepath.Join(dir, "waystation.toml")
+	path := filepath.Join(dir, "wip-relay.toml")
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatalf("写入配置失败：%v", err)
 	}
@@ -115,7 +115,7 @@ func TestReloadWritesRequestFile(t *testing.T) {
 }
 
 func TestReloadReportsBadConfig(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "waystation.toml")
+	path := filepath.Join(t.TempDir(), "wip-relay.toml")
 	if err := os.WriteFile(path, []byte("这份配置读不出来"), 0o600); err != nil {
 		t.Fatalf("写入配置失败：%v", err)
 	}

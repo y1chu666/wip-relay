@@ -1,4 +1,4 @@
-# Vault Waystation 中继服务端配置。
+# WIP Relay 中继服务端配置。
 #
 # 本文件是所有取值的唯一来源，界面与子命令都不会在运行时另行改写。
 # 任何降级（insecure、plaintext）都必须在此显式写出，程序不会自动降级。
@@ -14,15 +14,15 @@ data_dir = "./data"
 [registration]
 # 是否接受设备注册。设备注册完毕后请改为 false。
 enabled = false
-# 注册凭证的摘要，由 waystation init 生成六十四位小写十六进制值。
+# 注册凭证的摘要，由 wip-relay init 生成六十四位小写十六进制值。
 credential_digest = ""
 
 [transport]
 # https：公网证书；pinned：钉住自签证书；insecure：忽略证书错误；plaintext：明文。
 mode = "pinned"
 # 使用 https 或 pinned 时必须填写；另外两种取值下必须留空。
-cert_file = "/etc/waystation/relay.crt"
-key_file = "/etc/waystation/relay.key"
+cert_file = "/etc/wip-relay/relay.crt"
+key_file = "/etc/wip-relay/relay.key"
 
 [limits]
 # 留空或填零时取默认值，括号内为允许的上限。

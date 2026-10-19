@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"vaultwaystation/internal/config"
-	"vaultwaystation/internal/envelope"
-	"vaultwaystation/internal/identity"
-	"vaultwaystation/internal/store"
+	"github.com/y1chu666/wip-relay/internal/config"
+	"github.com/y1chu666/wip-relay/internal/envelope"
+	"github.com/y1chu666/wip-relay/internal/identity"
+	"github.com/y1chu666/wip-relay/internal/store"
 )
 
 const (
@@ -72,7 +72,7 @@ func newEnv(t *testing.T, mutate func(*config.Config)) *testEnv {
 		t.Fatalf("测试配置不合规：%v", err)
 	}
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "waystation.db"))
+	st, err := store.Open(filepath.Join(t.TempDir(), "wip-relay.db"))
 	if err != nil {
 		t.Fatalf("打开存储失败：%v", err)
 	}
