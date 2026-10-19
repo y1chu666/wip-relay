@@ -45,7 +45,7 @@ wip-relay serve --config wip-relay.toml
 
 WIP Relay 可与 [Vault WIP](https://github.com/y1chu666/vault-wip) 插件搭配：插件采集工作区状态，经中继转达给同一频道的其他设备。
 
-中继本身不限定于 Obsidian。协议公开，见[协议说明](docs/protocol.md)；任何按协议实现的客户端都可以接入，包括与笔记无关的 Git 仓库。
+中继本身不限定于 Obsidian。协议公开，见[协议说明](docs/protocol.md)；任何按协议实现的客户端都可以接入，包括与笔记无关的仓库。
 
 ## 文档
 

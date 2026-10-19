@@ -1,6 +1,6 @@
 # 协议
 
-本文说明插件与中继之间的通信规则。设计意图见[设计说明](https://github.com/y1chu666/vault-wip/blob/main/docs/design.md)。
+本文说明客户端与中继之间的通信规则。设计意图见[设计说明](https://github.com/y1chu666/vault-wip/blob/main/docs/design.md)。
 
 ## 身份
 
