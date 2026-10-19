@@ -30,6 +30,26 @@ const shutdownTimeout = 10 * time.Second
 // readHeaderTimeout 限制请求头的读取时长，避免慢速连接长期占住资源。
 const readHeaderTimeout = 10 * time.Second
 
+// 只设读头超时挡不住慢速正文：验签之前就要把正文收完，因此读整条请求也要有时限。
+// 各请求都是几百字节的 JSON，三十秒足够；空闲连接不必久留，一分钟即断。
+const (
+	readTimeout  = 30 * time.Second
+	writeTimeout = 30 * time.Second
+	idleTimeout  = 60 * time.Second
+)
+
+// newHTTPServer 按监听地址装配 HTTP 服务。留成函数便于用例核对超时一类的取值。
+func newHTTPServer(handler http.Handler, listen string) *http.Server {
+	return &http.Server{
+		Addr:              listen,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+}
+
 // Options 是启动服务所需的信息。
 type Options struct {
 	// ConfigPath 是配置文件位置。
@@ -61,11 +81,7 @@ func Run(ctx context.Context, options Options) error {
 	}
 
 	middle := api.New(settings, opened, key, logger)
-	httpServer := &http.Server{
-		Addr:              settings.Server.Listen,
-		Handler:           middle.Handler(),
-		ReadHeaderTimeout: readHeaderTimeout,
-	}
+	httpServer := newHTTPServer(middle.Handler(), settings.Server.Listen)
 
 	go watchReload(ctx, options.ConfigPath, middle, level, logger)
 

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -203,6 +204,27 @@ func TestReloadOnceKeepsOldSettingsOnBadConfig(t *testing.T) {
 	}
 	if got := middle.Settings().Limits.RequestsPerMinute; got != before {
 		t.Errorf("配置不可用时上限被改为 %d，期望保持 %d", got, before)
+	}
+}
+
+func TestNewHTTPServerSetsTimeouts(t *testing.T) {
+	server := newHTTPServer(http.NotFoundHandler(), "127.0.0.1:0")
+
+	// 只设读头超时挡不住慢速正文：正文收完之前不会验签，连接就一直被占着。
+	if server.ReadHeaderTimeout <= 0 {
+		t.Fatalf("未设读头超时：%v", server.ReadHeaderTimeout)
+	}
+	if server.ReadTimeout <= 0 {
+		t.Fatalf("未设读超时：%v", server.ReadTimeout)
+	}
+	if server.WriteTimeout <= 0 {
+		t.Fatalf("未设写超时：%v", server.WriteTimeout)
+	}
+	if server.IdleTimeout <= 0 {
+		t.Fatalf("未设空闲超时：%v", server.IdleTimeout)
+	}
+	if server.Addr != "127.0.0.1:0" {
+		t.Fatalf("监听地址未采用配置值：%q", server.Addr)
 	}
 }
 
