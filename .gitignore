@@ -1,0 +1,15 @@
+# 运行数据与本地配置
+/data/
+*.local.toml
+
+# 构建产物
+/wip-relay
+/wip-relay.exe
+/dist/
+cover.out
+
+# 编辑器与系统文件
+.DS_Store
+.idea/
+.vscode/
+*.swp
