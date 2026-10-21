@@ -47,6 +47,10 @@ WIP Relay can be paired with the [Vault WIP](https://github.com/y1chu666/vault-w
 
 The relay itself is not tied to Obsidian. The protocol is public, see [Protocol](docs/protocol.md); any client that implements it can connect, including for Git repositories unrelated to notes.
 
+## Version compatibility
+
+Starting with `0.2.0` this repository uses record format v2, which is not compatible with v1 in `0.1.0`. A relay does not parse record content, but it does take part in record signature verification, so it must be upgraded whenever a client changes the format; the two sides should be used in matching versions.
+
 ## Documentation
 
 The design documents are written in Chinese:
