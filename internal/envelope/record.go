@@ -9,7 +9,7 @@ import (
 	"github.com/y1chu666/wip-relay/internal/identity"
 )
 
-const recordContext = "wip-relay-record-v1"
+const recordContext = "wip-relay-record-v2"
 
 // Record 是状态记录中参与签名的要素。
 //
