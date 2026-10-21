@@ -1596,3 +1596,38 @@ func TestRegisterAllowsDuplicateAlias(t *testing.T) {
 		t.Fatalf("两个同名频道得到了同一个标识：%s", one)
 	}
 }
+
+func TestRegisterRequiresAliasWhenCreating(t *testing.T) {
+	env := newEnv(t, nil)
+	key := newKey(t)
+
+	status, body, _ := env.call(key, pathRegister, registerRequest{
+		Credential: testCredential,
+		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
+	})
+	expectStatus(t, status, body, http.StatusBadRequest)
+}
+
+func TestRegisterRejectsUnknownChannel(t *testing.T) {
+	env := newEnv(t, nil)
+	key := newKey(t)
+
+	status, body, _ := env.call(key, pathRegister, registerRequest{
+		ChannelID:    strings.Repeat("f", 32),
+		ChannelToken: strings.Repeat("a", 64),
+		PublicKey:    base64.StdEncoding.EncodeToString(key.Public()),
+	})
+	expectStatus(t, status, body, http.StatusNotFound)
+}
+
+func TestRegisterRejectsWrongCredentialOnCreate(t *testing.T) {
+	env := newEnv(t, nil)
+	key := newKey(t)
+
+	status, body, _ := env.call(key, pathRegister, registerRequest{
+		Alias:      testChannel,
+		Credential: "wrong-credential",
+		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
+	})
+	expectStatus(t, status, body, http.StatusUnauthorized)
+}

@@ -303,3 +303,76 @@ func TestRecoverReportsMissingRevocation(t *testing.T) {
 		t.Errorf("标准错误未说明设备未被吊销：%q", stderr)
 	}
 }
+
+func TestTokenIssuesForExistingChannel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wip-relay.toml")
+	if code, _, stderr := run("init", "--config", path); code != exitOK {
+		t.Fatalf("初始化失败：%s", stderr)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("读取配置失败：%v", err)
+	}
+	st, err := store.Open(cfg.StorePath())
+	if err != nil {
+		t.Fatalf("打开存储失败：%v", err)
+	}
+	if err := st.CreateChannel(store.Channel{ID: "channel-token", Alias: "notes"}); err != nil {
+		t.Fatalf("建立频道失败：%v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("关闭存储失败：%v", err)
+	}
+
+	code, stdout, stderr := run("token", "--config", path, "--channel", "channel-token")
+	if code != exitOK {
+		t.Fatalf("退出码为 %d，期望 %d；标准错误 %q", code, exitOK, stderr)
+	}
+	if !strings.Contains(stdout, "channel-token") || !strings.Contains(stdout, "notes") {
+		t.Fatalf("输出未说明频道：%q", stdout)
+	}
+
+	cfg, err = config.Load(path)
+	if err != nil {
+		t.Fatalf("重新读取配置失败：%v", err)
+	}
+	opened, err := store.Open(cfg.StorePath())
+	if err != nil {
+		t.Fatalf("重新打开存储失败：%v", err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	channel, err := opened.Channel("channel-token")
+	if err != nil {
+		t.Fatalf("读取频道失败：%v", err)
+	}
+	if len(channel.TokenHash) != 32 {
+		t.Fatalf("令牌摘要长度为 %d，期望 32", len(channel.TokenHash))
+	}
+}
+
+func TestTokenRequiresChannel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wip-relay.toml")
+	if code, _, stderr := run("init", "--config", path); code != exitOK {
+		t.Fatalf("初始化失败：%s", stderr)
+	}
+
+	code, _, _ := run("token", "--config", path)
+	if code != exitUsage {
+		t.Fatalf("缺少频道时的退出码为 %d，期望 %d", code, exitUsage)
+	}
+}
+
+func TestTokenRejectsMissingChannel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wip-relay.toml")
+	if code, _, stderr := run("init", "--config", path); code != exitOK {
+		t.Fatalf("初始化失败：%s", stderr)
+	}
+
+	code, _, _ := run("token", "--config", path, "--channel", "absent")
+	if code != exitFail {
+		t.Fatalf("频道不存在时的退出码为 %d，期望 %d", code, exitFail)
+	}
+}
