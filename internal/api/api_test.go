@@ -35,13 +35,15 @@ const (
 
 // testEnv 是一套可用的服务端，带一个固定的时钟，便于测试时间窗口。
 type testEnv struct {
-	t          *testing.T
-	cfg        *config.Config
-	store      *store.Store
-	server     *Server
-	handler    http.Handler
-	now        time.Time
-	remoteAddr string
+	t            *testing.T
+	cfg          *config.Config
+	store        *store.Store
+	server       *Server
+	handler      http.Handler
+	now          time.Time
+	remoteAddr   string
+	channelID    string
+	channelToken string
 }
 
 func newEnv(t *testing.T, mutate func(*config.Config)) *testEnv {
@@ -193,14 +195,24 @@ func (e *testEnv) verifyResponse(header http.Header, status int, body []byte) {
 }
 
 // register 注册一台设备，并返回频道标识。
+//
+// 第一次调用新建频道并记下令牌，之后都加入这个频道：多数用例需要多台设备同处
+// 一个频道，而新协议下加入必须出示标识与令牌。
 func (e *testEnv) register(key *identity.KeyPair) string {
 	e.t.Helper()
 
-	status, body, header := e.call(key, pathRegister, registerRequest{
-		Channel:    testChannel,
-		Credential: testCredential,
-		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
-	})
+	request := registerRequest{
+		Alias:     testChannel,
+		PublicKey: base64.StdEncoding.EncodeToString(key.Public()),
+	}
+	if e.channelID == "" {
+		request.Credential = testCredential
+	} else {
+		request.ChannelID = e.channelID
+		request.ChannelToken = e.channelToken
+	}
+
+	status, body, header := e.call(key, pathRegister, request)
 	if status != http.StatusOK {
 		e.t.Fatalf("注册失败：状态 %d，正文 %s", status, body)
 	}
@@ -209,6 +221,10 @@ func (e *testEnv) register(key *identity.KeyPair) string {
 	var response channelResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		e.t.Fatalf("解析注册响应失败：%v", err)
+	}
+	e.channelID = response.ChannelID
+	if response.ChannelToken != "" {
+		e.channelToken = response.ChannelToken
 	}
 	return response.ChannelID
 }
@@ -310,7 +326,7 @@ func TestRegisterRejectsWrongCredential(t *testing.T) {
 	key := newKey(t)
 
 	status, body, _ := env.call(key, pathRegister, registerRequest{
-		Channel:    testChannel,
+		Alias:      testChannel,
 		Credential: "错误的凭证",
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
@@ -328,7 +344,7 @@ func TestRegisterRejectsWhenDisabled(t *testing.T) {
 	key := newKey(t)
 
 	status, body, _ := env.call(key, pathRegister, registerRequest{
-		Channel:    testChannel,
+		Alias:      testChannel,
 		Credential: testCredential,
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
@@ -343,7 +359,7 @@ func TestRegisterRejectsDegradedTransport(t *testing.T) {
 	key := newKey(t)
 
 	status, body, _ := env.call(key, pathRegister, registerRequest{
-		Channel:    testChannel,
+		Alias:      testChannel,
 		Credential: testCredential,
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
@@ -360,7 +376,7 @@ func TestRegisterRejectsMismatchedFingerprint(t *testing.T) {
 
 	// 声明的是 key 的指纹，给的却是 other 的公钥。
 	status, body, _ := env.call(key, pathRegister, registerRequest{
-		Channel:    testChannel,
+		Alias:      testChannel,
 		Credential: testCredential,
 		PublicKey:  base64.StdEncoding.EncodeToString(other.Public()),
 	})
@@ -404,9 +420,10 @@ func TestRegisterRejectsAfterRevocation(t *testing.T) {
 	expectStatus(t, status, body, http.StatusOK)
 
 	status, body, _ = env.call(first, pathRegister, registerRequest{
-		Channel:    testChannel,
-		Credential: testCredential,
-		PublicKey:  base64.StdEncoding.EncodeToString(first.Public()),
+		Alias:        testChannel,
+		ChannelID:    env.channelID,
+		ChannelToken: env.channelToken,
+		PublicKey:    base64.StdEncoding.EncodeToString(first.Public()),
 	})
 
 	expectStatus(t, status, body, http.StatusUnauthorized)
@@ -420,9 +437,10 @@ func TestRegisterRejectsWhenChannelIsFull(t *testing.T) {
 	key := newKey(t)
 
 	status, body, _ := env.call(key, pathRegister, registerRequest{
-		Channel:    testChannel,
-		Credential: testCredential,
-		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
+		Alias:        testChannel,
+		ChannelID:    env.channelID,
+		ChannelToken: env.channelToken,
+		PublicKey:    base64.StdEncoding.EncodeToString(key.Public()),
 	})
 
 	expectStatus(t, status, body, http.StatusConflict)
@@ -978,7 +996,7 @@ func TestRateLimitAppliesToDestructiveCommands(t *testing.T) {
 
 	other := newKey(t)
 	status, body, _ = env.call(other, pathRegister, registerRequest{
-		Channel:    testChannel,
+		Alias:      testChannel,
 		Credential: testCredential,
 		PublicKey:  base64.StdEncoding.EncodeToString(other.Public()),
 	})
@@ -1132,7 +1150,7 @@ func TestRegisterRejectsMalformedPublicKey(t *testing.T) {
 	for name, publicKey := range cases {
 		t.Run(name, func(t *testing.T) {
 			status, body, _ := env.call(key, pathRegister, registerRequest{
-				Channel:    testChannel,
+				Alias:      testChannel,
 				Credential: testCredential,
 				PublicKey:  publicKey,
 			})
@@ -1149,7 +1167,7 @@ func TestRegisterReportsInternalFailure(t *testing.T) {
 	key := newKey(t)
 
 	status, body, _ := env.call(key, pathRegister, registerRequest{
-		Channel:    testChannel,
+		Alias:      testChannel,
 		Credential: testCredential,
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
@@ -1285,7 +1303,7 @@ func TestPanicIsContained(t *testing.T) {
 	key := newKey(t)
 
 	status, body, _ := env.call(key, pathRegister, registerRequest{
-		Channel:    testChannel,
+		Alias:      testChannel,
 		Credential: testCredential,
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
@@ -1315,7 +1333,7 @@ func TestReloadSwapsSettingsAndLimit(t *testing.T) {
 
 	key := newKey(t)
 	status, body, _ := env.call(key, pathRegister, registerRequest{
-		Channel:    testChannel,
+		Alias:      testChannel,
 		Credential: testCredential,
 		PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
 	})
@@ -1365,6 +1383,12 @@ func TestConcurrentRegisterKeepsOneChannelWithinLimit(t *testing.T) {
 		cfg.Limits.RequestsPerMinute = 1000
 	})
 
+	// 先建好频道，再让多台设备并发加入：新协议下创建与加入是两条路径，
+	// 这里要固定的是「加入」这一侧的检查与写入不会被并发绕开。
+	owner := newKey(t)
+	env.register(owner)
+	channelID, token := env.channelID, env.channelToken
+
 	const attempts = 8
 	keys := make([]*identity.KeyPair, attempts)
 	for i := range keys {
@@ -1378,9 +1402,10 @@ func TestConcurrentRegisterKeepsOneChannelWithinLimit(t *testing.T) {
 		go func(index int) {
 			defer wg.Done()
 			status, _, _ := env.call(keys[index], pathRegister, registerRequest{
-				Channel:    testChannel,
-				Credential: testCredential,
-				PublicKey:  base64.StdEncoding.EncodeToString(keys[index].Public()),
+				Alias:        testChannel,
+				ChannelID:    channelID,
+				ChannelToken: token,
+				PublicKey:    base64.StdEncoding.EncodeToString(keys[index].Public()),
 			})
 			statuses[index] = status
 		}(i)
@@ -1493,5 +1518,81 @@ func TestReportResponseHonoursByteBudget(t *testing.T) {
 	}
 	if !response.Truncated {
 		t.Fatal("按字节预算截断之后没有标注")
+	}
+}
+
+func TestRegisterIssuesTokenOnlyWhenCreating(t *testing.T) {
+	env := newEnv(t, nil)
+	key := newKey(t)
+	publicKey := base64.StdEncoding.EncodeToString(key.Public())
+
+	status, body, _ := env.call(key, pathRegister, registerRequest{
+		Alias:      testChannel,
+		Credential: testCredential,
+		PublicKey:  publicKey,
+	})
+	expectStatus(t, status, body, http.StatusOK)
+	var created channelResponse
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatalf("解析创建响应失败：%v", err)
+	}
+	if created.ChannelToken == "" {
+		t.Fatal("创建频道时没有返回令牌")
+	}
+
+	status, body, _ = env.call(key, pathRegister, registerRequest{
+		Alias:        testChannel,
+		ChannelID:    created.ChannelID,
+		ChannelToken: created.ChannelToken,
+		PublicKey:    publicKey,
+	})
+	expectStatus(t, status, body, http.StatusOK)
+	var joined channelResponse
+	if err := json.Unmarshal(body, &joined); err != nil {
+		t.Fatalf("解析加入响应失败：%v", err)
+	}
+	if joined.ChannelToken != "" {
+		t.Fatalf("加入已有频道时又返回了令牌：%q", joined.ChannelToken)
+	}
+	if joined.ChannelID != created.ChannelID {
+		t.Fatalf("加入后的频道标识为 %s，期望 %s", joined.ChannelID, created.ChannelID)
+	}
+}
+
+func TestRegisterRejectsWrongChannelToken(t *testing.T) {
+	env := newEnv(t, nil)
+	env.register(newKey(t))
+	other := newKey(t)
+
+	status, body, _ := env.call(other, pathRegister, registerRequest{
+		Alias:        testChannel,
+		ChannelID:    env.channelID,
+		ChannelToken: strings.Repeat("0", 64),
+		PublicKey:    base64.StdEncoding.EncodeToString(other.Public()),
+	})
+	expectStatus(t, status, body, http.StatusUnauthorized)
+}
+
+func TestRegisterAllowsDuplicateAlias(t *testing.T) {
+	env := newEnv(t, nil)
+	first, second := newKey(t), newKey(t)
+
+	create := func(key *identity.KeyPair) string {
+		status, body, _ := env.call(key, pathRegister, registerRequest{
+			Alias:      testChannel,
+			Credential: testCredential,
+			PublicKey:  base64.StdEncoding.EncodeToString(key.Public()),
+		})
+		expectStatus(t, status, body, http.StatusOK)
+		var response channelResponse
+		if err := json.Unmarshal(body, &response); err != nil {
+			t.Fatalf("解析创建响应失败：%v", err)
+		}
+		return response.ChannelID
+	}
+
+	one, two := create(first), create(second)
+	if one == two {
+		t.Fatalf("两个同名频道得到了同一个标识：%s", one)
 	}
 }

@@ -36,6 +36,7 @@ const usage = `用法：wip-relay <子命令> [选项]
   list      列出频道、设备、状态记录与吊销名单
   reload    请正在运行的服务重新读取配置
   recover   把设备移出吊销名单
+  token     为已有频道生成新的令牌
   version   输出版本信息
   help      输出本说明
 
@@ -69,6 +70,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runReload(args[1:], stdout, stderr)
 	case "recover":
 		return runRecover(args[1:], stdout, stderr)
+	case "token":
+		return runToken(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "未知子命令：%s\n", args[0])
 		fmt.Fprint(stderr, usage)

@@ -42,11 +42,13 @@ const (
 
 // harness 是一套已经跑起来的服务端，以及连上它的客户端。
 type harness struct {
-	t          *testing.T
-	url        string
-	configPath string
-	serverKey  *identity.KeyPair
-	httpClient *http.Client
+	t            *testing.T
+	url          string
+	configPath   string
+	serverKey    *identity.KeyPair
+	httpClient   *http.Client
+	channelID    string
+	channelToken string
 }
 
 // start 写证书与配置，启动服务，并等到端口可用。
@@ -194,14 +196,23 @@ func (h *harness) verifyResponse(response *http.Response, body []byte) {
 }
 
 // register 注册一台设备，返回频道标识。
+//
+// 首次调用创建频道并记下令牌，之后加入同一频道。
 func (h *harness) register(key *identity.KeyPair) string {
 	h.t.Helper()
 
-	status, body := h.call(key, "/v1/register", map[string]string{
-		"channel":    "vault-example",
-		"credential": credential,
+	request := map[string]string{
+		"alias":      "vault-example",
 		"public_key": base64.StdEncoding.EncodeToString(key.Public()),
-	})
+	}
+	if h.channelID == "" {
+		request["credential"] = credential
+	} else {
+		request["channel_id"] = h.channelID
+		request["channel_token"] = h.channelToken
+	}
+
+	status, body := h.call(key, "/v1/register", request)
 	if status != http.StatusOK {
 		h.t.Fatalf("注册失败：状态 %d，正文 %s", status, body)
 	}
@@ -209,9 +220,14 @@ func (h *harness) register(key *identity.KeyPair) string {
 	var response struct {
 		ChannelID    string `json:"channel_id"`
 		ChannelAlias string `json:"channel_alias"`
+		ChannelToken string `json:"channel_token"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		h.t.Fatalf("解析注册响应失败：%v", err)
+	}
+	h.channelID = response.ChannelID
+	if response.ChannelToken != "" {
+		h.channelToken = response.ChannelToken
 	}
 	if response.ChannelAlias != "vault-example" {
 		h.t.Fatalf("频道别名为 %q，期望 vault-example", response.ChannelAlias)
@@ -420,7 +436,7 @@ func TestReloadRequestFileTakesEffect(t *testing.T) {
 	waitReloaded(t, settings.ReloadRequestPath())
 
 	status, _ := h.call(newKey(t), "/v1/register", map[string]string{
-		"channel":    "vault-example",
+		"alias":      "vault-example",
 		"credential": credential,
 		"public_key": "不合规",
 	})
@@ -447,7 +463,7 @@ func TestPlaintextRelayRefusesDestructiveCommands(t *testing.T) {
 	h := startPlaintext(t)
 
 	status, body := h.call(newKey(t), "/v1/register", map[string]string{
-		"channel":    "vault-example",
+		"alias":      "vault-example",
 		"credential": credential,
 		"label":      "device-a",
 		"public_key": "不合规",

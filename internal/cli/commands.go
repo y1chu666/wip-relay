@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"time"
@@ -129,6 +132,57 @@ func runRecover(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintf(stdout, "已把 %s 移出频道 %s 的吊销名单；该设备需要重新注册才能继续使用。\n", fingerprint, *channel)
 	return exitOK
+}
+
+// runToken 为已有频道生成新的令牌。
+//
+// 旧版本按别名建频道，没有令牌这一项；升级之后要为这些频道补一枚，
+// 否则新设备只能加入新建的频道。重新执行会让旧令牌失效。
+func runToken(args []string, stdout, stderr io.Writer) int {
+	flags := newFlagSet("token", stderr)
+	configPath := flags.String("config", defaultConfigPath, "配置文件位置")
+	channel := flags.String("channel", "", "频道标识")
+	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+	if *channel == "" {
+		fmt.Fprint(stderr, "token 需要给出 --channel。\n")
+		return exitUsage
+	}
+
+	_, opened, err := openStore(*configPath)
+	if err != nil {
+		return fail(stderr, err)
+	}
+	defer func() { _ = opened.Close() }()
+
+	stored, err := opened.Channel(store.ChannelID(*channel))
+	if err != nil {
+		return fail(stderr, err)
+	}
+
+	value, err := newChannelToken()
+	if err != nil {
+		return fail(stderr, err)
+	}
+	sum := sha256.Sum256([]byte(value))
+	stored.TokenHash = sum[:]
+	if err := opened.UpdateChannel(stored); err != nil {
+		return fail(stderr, err)
+	}
+
+	fmt.Fprintf(stdout, "频道 %s（%s）的新令牌如下：\n\n    %s\n\n", stored.ID, stored.Alias, value)
+	fmt.Fprintln(stdout, "令牌只在此显示一次；再次执行本命令会让旧令牌失效。")
+	return exitOK
+}
+
+// newChannelToken 生成一枚频道令牌。
+func newChannelToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("生成频道令牌：%w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // stamp 统一把时间折算为协调世界时输出。

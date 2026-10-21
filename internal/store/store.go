@@ -57,9 +57,13 @@ const (
 type ChannelID string
 
 // Channel 是一个频道，对应某台设备上的一个笔记仓库。
+//
+// 频道标识由服务端生成且全局唯一；别名只是显示用的名字，允许重复，也允许修改。
+// 加入频道需要出示频道令牌，服务端只保存它的摘要。
 type Channel struct {
 	ID        ChannelID
 	Alias     string
+	TokenHash []byte
 	CreatedAt time.Time
 }
 
@@ -131,6 +135,17 @@ func (s *Store) CreateChannel(channel Channel) error {
 			return ErrChannelExists
 		}
 		return putJSON(bucket, key, channel)
+	})
+}
+
+// UpdateChannel 覆盖写入一个频道；频道不存在时报错。
+func (s *Store) UpdateChannel(channel Channel) error {
+	return s.write(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(channelBucket))
+		if bucket.Get([]byte(channel.ID)) == nil {
+			return ErrChannelNotFound
+		}
+		return putJSON(bucket, []byte(channel.ID), channel)
 	})
 }
 

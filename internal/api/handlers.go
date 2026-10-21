@@ -2,7 +2,11 @@ package api
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"sort"
@@ -29,6 +33,8 @@ type errorResponse struct {
 type channelResponse struct {
 	ChannelID    string `json:"channel_id"`
 	ChannelAlias string `json:"channel_alias"`
+	// ChannelToken 只在新建频道时返回一次；加入已有频道时为空。
+	ChannelToken string `json:"channel_token,omitempty"`
 }
 
 // registerRequest 是注册请求。
@@ -36,8 +42,13 @@ type channelResponse struct {
 // 请求里没有设备名称：名称由各设备写进自己那份加密内容，中继看不到，
 // 也就不必在注册时把名字交到这里。
 type registerRequest struct {
-	// Channel 是设备所报的仓库名称，服务端据此加入或建立频道。
-	Channel    string `json:"channel"`
+	// Alias 是频道显示名，允许重复，也不参与频道识别。
+	Alias string `json:"alias"`
+	// ChannelID 为空表示新建频道；不为空表示加入这个频道。
+	ChannelID string `json:"channel_id"`
+	// ChannelToken 是加入已有频道时出示的令牌，与 ChannelID 配对使用。
+	ChannelToken string `json:"channel_token"`
+	// Credential 只在新建频道时出示。
 	Credential string `json:"credential"`
 	PublicKey  string `json:"public_key"`
 }
@@ -145,17 +156,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if !s.decode(w, request.Body, &payload) {
 		return
 	}
-	if payload.Channel == "" {
-		s.writeError(w, http.StatusBadRequest, codeBadRequest, "缺少仓库名称")
-		return
-	}
 
-	if !cfg.Registration.Enabled {
+	if payload.ChannelID == "" && !cfg.Registration.Enabled {
 		s.writeError(w, http.StatusForbidden, codeForbidden, "服务端当前未开放注册")
-		return
-	}
-	if config.DigestCredential(payload.Credential) != cfg.Registration.CredentialDigest {
-		s.writeError(w, http.StatusUnauthorized, codeUnauthorized, "注册凭证不正确")
 		return
 	}
 
@@ -173,8 +176,23 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	channel, err := s.registerDevice(cfg, payload.Channel, request, publicKey)
+	channel, token, err := s.register(cfg, payload, request, publicKey)
 	switch {
+	case errors.Is(err, errRegistrationClosed):
+		s.writeError(w, http.StatusForbidden, codeForbidden, "服务端当前未开放注册")
+		return
+	case errors.Is(err, errBadCredential):
+		s.writeError(w, http.StatusUnauthorized, codeUnauthorized, "注册凭证不正确")
+		return
+	case errors.Is(err, errMissingAlias):
+		s.writeError(w, http.StatusBadRequest, codeBadRequest, "缺少频道别名")
+		return
+	case errors.Is(err, errChannelNotFound):
+		s.writeError(w, http.StatusNotFound, codeNotFound, "频道不存在")
+		return
+	case errors.Is(err, errBadChannelToken):
+		s.writeError(w, http.StatusUnauthorized, codeUnauthorized, "频道令牌不正确")
+		return
 	case errors.Is(err, errDeviceRevoked):
 		s.writeError(w, http.StatusUnauthorized, codeUnauthorized, "该设备已被吊销，不能再次注册")
 		return
@@ -186,54 +204,149 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.logger.Info("设备已注册", "频道", channel.ID, "设备", request.Fingerprint.String())
-	s.writeJSON(w, http.StatusOK, channelResponse{ChannelID: string(channel.ID), ChannelAlias: channel.Alias})
+	if token == "" {
+		s.logger.Info("设备已加入频道", "频道", channel.ID, "设备", request.Fingerprint.String())
+	} else {
+		s.logger.Info("频道已创建", "频道", channel.ID, "别名", channel.Alias)
+	}
+	s.writeJSON(w, http.StatusOK, channelResponse{
+		ChannelID:    string(channel.ID),
+		ChannelAlias: channel.Alias,
+		ChannelToken: token,
+	})
 }
 
-// registerDevice 在临界区里完成注册：解析或建立频道、检查吊销与重复注册、
-// 数设备、写入设备。
+// register 在临界区里完成创建或加入，并登记设备。
 //
-// 检查与写入之间若能被别的请求插进来，并发注册就能突破设备数上限，也会为同一个
-// 别名建出多个频道——那会让同一仓库的两台设备互相看不到对方的记录。
-func (s *Server) registerDevice(cfg *config.Config, alias string, request signedRequest, publicKey ed25519.PublicKey) (store.Channel, error) {
+// 频道标识由服务端生成、全局唯一；别名只用于显示，允许重复。加入已有频道必须
+// 出示与该标识配对的令牌，否则任何拿到注册凭证的人都能闯进别人的频道。
+func (s *Server) register(
+	cfg *config.Config,
+	payload registerRequest,
+	request signedRequest,
+	publicKey ed25519.PublicKey,
+) (store.Channel, string, error) {
 	s.channelMu.Lock()
 	defer s.channelMu.Unlock()
 
-	channel, err := s.channelByName(alias)
+	channel, issued, err := s.resolveChannel(cfg, payload)
 	if err != nil {
-		return store.Channel{}, err
+		return store.Channel{}, "", err
+	}
+	if err := s.addDevice(cfg, channel, request, publicKey); err != nil {
+		return store.Channel{}, "", err
+	}
+	return channel, issued, nil
+}
+
+// resolveChannel 决定这次注册是新建频道还是加入已有频道。
+//
+// 新建时生成令牌并只返回这一次；加入时只核对令牌摘要，不再回传令牌。
+func (s *Server) resolveChannel(
+	cfg *config.Config,
+	payload registerRequest,
+) (store.Channel, string, error) {
+	if payload.ChannelID != "" {
+		channel, err := s.store.Channel(store.ChannelID(payload.ChannelID))
+		switch {
+		case errors.Is(err, store.ErrChannelNotFound):
+			return store.Channel{}, "", errChannelNotFound
+		case err != nil:
+			return store.Channel{}, "", err
+		}
+		if !tokenMatches(channel.TokenHash, payload.ChannelToken) {
+			return store.Channel{}, "", errBadChannelToken
+		}
+		return channel, "", nil
 	}
 
+	if !cfg.Registration.Enabled {
+		return store.Channel{}, "", errRegistrationClosed
+	}
+	if config.DigestCredential(payload.Credential) != cfg.Registration.CredentialDigest {
+		return store.Channel{}, "", errBadCredential
+	}
+	if payload.Alias == "" {
+		return store.Channel{}, "", errMissingAlias
+	}
+
+	token, err := newChannelToken()
+	if err != nil {
+		return store.Channel{}, "", err
+	}
+	id, err := s.newID()
+	if err != nil {
+		return store.Channel{}, "", err
+	}
+	channel := store.Channel{
+		ID:        id,
+		Alias:     payload.Alias,
+		TokenHash: digestToken(token),
+		CreatedAt: s.now().UTC(),
+	}
+	if err := s.store.CreateChannel(channel); err != nil {
+		return store.Channel{}, "", err
+	}
+	return channel, token, nil
+}
+
+// addDevice 检查吊销、重复注册与设备数上限，然后把设备写进频道。
+func (s *Server) addDevice(
+	cfg *config.Config,
+	channel store.Channel,
+	request signedRequest,
+	publicKey ed25519.PublicKey,
+) error {
 	if _, err := s.store.Revocation(channel.ID, request.Fingerprint); err == nil {
-		return store.Channel{}, errDeviceRevoked
+		return errDeviceRevoked
 	} else if !errors.Is(err, store.ErrNotRevoked) {
-		return store.Channel{}, err
+		return err
 	}
 
 	if _, err := s.store.Device(channel.ID, request.Fingerprint); err == nil {
 		// 重复注册视为幂等：设备已经在频道里，直接回以频道信息。
-		return channel, nil
+		return nil
 	} else if !errors.Is(err, store.ErrDeviceNotFound) {
-		return store.Channel{}, err
+		return err
 	}
 
 	count, err := s.store.CountDevices(channel.ID)
 	if err != nil {
-		return store.Channel{}, err
+		return err
 	}
 	if count >= cfg.Limits.DevicesPerChannel {
-		return store.Channel{}, errChannelFull
+		return errChannelFull
 	}
 
-	device := store.Device{
+	return s.store.AddDevice(channel.ID, store.Device{
 		Fingerprint:  request.Fingerprint,
 		PublicKey:    publicKey,
 		RegisteredAt: s.now().UTC(),
+	})
+}
+
+// newChannelToken 生成一枚频道令牌；只在创建频道时返回一次。
+func newChannelToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
 	}
-	if err := s.store.AddDevice(channel.ID, device); err != nil {
-		return store.Channel{}, err
+	return hex.EncodeToString(buf), nil
+}
+
+// digestToken 取令牌的摘要；服务端只保存摘要。
+func digestToken(token string) []byte {
+	sum := sha256.Sum256([]byte(token))
+	return sum[:]
+}
+
+// tokenMatches 以常数时间比较，免得比较耗时泄露前缀信息。
+func tokenMatches(hash []byte, token string) bool {
+	if len(hash) == 0 || token == "" {
+		return false
 	}
-	return channel, nil
+	sum := sha256.Sum256([]byte(token))
+	return subtle.ConstantTimeCompare(hash, sum[:]) == 1
 }
 
 // handleReport 处理状态上报，并把频道内其他设备的状态一并回送。
@@ -637,30 +750,4 @@ func (s *Server) retireDevice(cfg *config.Config, channel store.ChannelID, finge
 	}
 	revocation := store.Revocation{Fingerprint: fingerprint, By: fingerprint, At: s.now().UTC()}
 	return s.store.Revoke(channel, revocation)
-}
-
-// channelByName 找出以该名称作为别名的频道，没有则建立。
-//
-// 调用方已保证名称非空。别名相同即视为同一个仓库；两台设备同时以同一名称注册时
-// 有可能各建一个频道，但注册本是罕见动作，这里不为它引入额外的协调。
-func (s *Server) channelByName(alias string) (store.Channel, error) {
-	channels, err := s.store.Channels()
-	if err != nil {
-		return store.Channel{}, err
-	}
-	for _, channel := range channels {
-		if channel.Alias == alias {
-			return channel, nil
-		}
-	}
-
-	id, err := s.newID()
-	if err != nil {
-		return store.Channel{}, err
-	}
-	channel := store.Channel{ID: id, Alias: alias, CreatedAt: s.now().UTC()}
-	if err := s.store.CreateChannel(channel); err != nil {
-		return store.Channel{}, err
-	}
-	return channel, nil
 }

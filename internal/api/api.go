@@ -55,10 +55,15 @@ const (
 
 // 注册与吊销路径上可预期的失败：设备已被吊销、频道已满、目标不在频道内或已是最后一台可用设备。
 var (
-	errDeviceRevoked   = errors.New("设备已被吊销")
-	errChannelFull     = errors.New("频道内设备数已达上限")
-	errLastDevice      = errors.New("不允许吊销频道内最后一台可用设备")
-	errRevocationsFull = errors.New("频道内吊销名单已达上限")
+	errDeviceRevoked      = errors.New("设备已被吊销")
+	errChannelFull        = errors.New("频道内设备数已达上限")
+	errLastDevice         = errors.New("不允许吊销频道内最后一台可用设备")
+	errRevocationsFull    = errors.New("频道内吊销名单已达上限")
+	errRegistrationClosed = errors.New("注册未开放")
+	errBadCredential      = errors.New("注册凭证不正确")
+	errMissingAlias       = errors.New("缺少频道别名")
+	errChannelNotFound    = errors.New("频道不存在")
+	errBadChannelToken    = errors.New("频道令牌不正确")
 )
 
 // revocationsFullMessage 说明名单满了该怎么办：这是配置能解决的事，不是故障。
